@@ -9,8 +9,6 @@ import { useVoice } from "@/components/voice-provider"
 import { Mic, MicOff } from "lucide-react"
 
 export default function PortugueseTutor() {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const animationRef = useRef<number>()
   const [textInput, setTextInput] = useState("")
 
   const {
@@ -22,71 +20,9 @@ export default function PortugueseTutor() {
     subtitles,
     startConversation,
     stopConversation,
-    sendTextMessage,
-    startVoiceInput,
-    stopVoiceInput,
     debugInfo,
   } = useVoice()
 
-  const startWaveformAnimation = () => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-
-    const ctx = canvas.getContext("2d")
-    if (!ctx) return
-
-    const animate = () => {
-      const width = canvas.width
-      const height = canvas.height
-
-      ctx.clearRect(0, 0, width, height)
-
-      const time = Date.now() * 0.005
-      const centerY = height / 2
-      const amplitude = isAgentSpeaking ? 60 : isRecording ? 45 : isListening ? 30 : 15
-      const frequency = isAgentSpeaking ? 0.03 : 0.02
-
-      ctx.strokeStyle = isAgentSpeaking ? "#10b981" : isRecording ? "#ef4444" : "#3b82f6"
-      ctx.lineWidth = 3
-      ctx.beginPath()
-
-      for (let x = 0; x < width; x += 2) {
-        const y = centerY + Math.sin(x * frequency + time) * amplitude * Math.sin(time * 0.5)
-        if (x === 0) {
-          ctx.moveTo(x, y)
-        } else {
-          ctx.lineTo(x, y)
-        }
-      }
-
-      ctx.stroke()
-      animationRef.current = requestAnimationFrame(animate)
-    }
-
-    animate()
-  }
-
-  useEffect(() => {
-    if (isConnected) {
-      startWaveformAnimation()
-    } else if (animationRef.current) {
-      cancelAnimationFrame(animationRef.current)
-    }
-
-    return () => {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current)
-      }
-    }
-  }, [isConnected, isAgentSpeaking, isListening, isRecording])
-
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (canvas) {
-      canvas.width = 800
-      canvas.height = 200
-    }
-  }, [])
 
   const handleTextSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -130,7 +66,7 @@ export default function PortugueseTutor() {
             Começar Conversa
           </Button>
 
-          <p className="text-sm text-gray-500">Acesso ao microfone necessário</p>
+          <p className="text-sm text-gray-500">Acesso ao microfone necessário - conversas automáticas</p>
         </div>
       ) : (
         <div className="w-full max-w-4xl text-center space-y-8">
@@ -140,14 +76,11 @@ export default function PortugueseTutor() {
                 isAgentSpeaking ? "bg-green-500" : isRecording ? "bg-red-500" : "bg-blue-500"
               } animate-pulse`}
             ></div>
-            <p className="text-lg font-medium text-gray-700">
-              {isAgentSpeaking ? "Tutor falando..." : isRecording ? "Gravando sua resposta..." : "Sua vez de responder"}
+            <p className="text-xl font-medium text-gray-700">
+              {isAgentSpeaking ? "Tutor falando..." : isRecording ? "Ouvindo você..." : "Pronto para ouvir"}
             </p>
           </div>
 
-          <div className="flex justify-center">
-            <canvas ref={canvasRef} className="border-2 border-blue-200 rounded-lg bg-white/50 backdrop-blur-sm" />
-          </div>
 
           <div className="bg-black/80 text-white p-6 rounded-lg min-h-[120px] flex items-center justify-center">
             <p className="text-2xl leading-relaxed font-medium">{subtitles || "Preparando sua primeira pergunta..."}</p>
@@ -159,44 +92,23 @@ export default function PortugueseTutor() {
             </div>
           )}
 
-          <div className="bg-white border-2 border-blue-200 rounded-lg p-6 space-y-4">
-            <div className="flex items-center justify-center space-x-4">
-              <Button
-                onMouseDown={startVoiceInput}
-                onMouseUp={stopVoiceInput}
-                onTouchStart={startVoiceInput}
-                onTouchEnd={stopVoiceInput}
-                disabled={isAgentSpeaking}
-                className={`w-16 h-16 rounded-full ${
-                  isRecording ? "bg-red-500 hover:bg-red-600 animate-pulse" : "bg-blue-500 hover:bg-blue-600"
-                } text-white shadow-lg transition-all duration-200`}
-              >
-                {isRecording ? <MicOff size={24} /> : <Mic size={24} />}
-              </Button>
-              <div className="text-center">
-                <p className="text-blue-800 font-medium">{isRecording ? "Solte para parar" : "Segure para falar"}</p>
-                <p className="text-sm text-gray-600">ou digite abaixo</p>
+          <div className="bg-white border-2 border-blue-200 rounded-lg p-8">
+            <div className="text-center space-y-4">
+              <div className={`w-24 h-24 mx-auto rounded-full flex items-center justify-center ${
+                isRecording ? "bg-red-100 border-4 border-red-500" : "bg-blue-100 border-4 border-blue-500"
+              } transition-all duration-300`}>
+                {isRecording ? (
+                  <div className="w-8 h-8 bg-red-500 rounded-full animate-pulse"></div>
+                ) : (
+                  <Mic size={32} className="text-blue-600" />
+                )}
               </div>
-            </div>
-
-            <div className="border-t pt-4">
-              <p className="text-blue-800 mb-4 font-medium">Digite sua resposta em português:</p>
-              <form onSubmit={handleTextSubmit} className="flex gap-2">
-                <Input
-                  value={textInput}
-                  onChange={(e) => setTextInput(e.target.value)}
-                  placeholder="Escreva sua resposta aqui..."
-                  disabled={isAgentSpeaking || isRecording}
-                  className="flex-1 text-lg p-3"
-                />
-                <Button
-                  type="submit"
-                  disabled={!textInput.trim() || isAgentSpeaking || isRecording}
-                  className="px-6 py-3"
-                >
-                  Enviar
-                </Button>
-              </form>
+              <p className="text-blue-800 font-medium text-lg">
+                {isRecording ? "Falando..." : "Conversação ativa"}
+              </p>
+              <p className="text-sm text-gray-600">
+                Fale naturalmente - sua voz será detectada automaticamente
+              </p>
             </div>
           </div>
 

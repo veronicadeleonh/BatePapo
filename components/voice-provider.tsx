@@ -2,8 +2,14 @@
 
 import type React from "react"
 import { createContext, useContext, useState, useRef, useCallback } from "react"
-import { generateText } from "ai"
-import { openai } from "@ai-sdk/openai"
+
+// TypeScript declarations for Web Speech API
+declare global {
+  interface Window {
+    SpeechRecognition: any
+    webkitSpeechRecognition: any
+  }
+}
 
 interface VoiceContextType {
   isListening: boolean
@@ -28,6 +34,9 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
   const [isConnected, setIsConnected] = useState(false)
   const [isAgentSpeaking, setIsAgentSpeaking] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
+  const isRecordingRef = useRef(false)
+  const [isAutoListening, setIsAutoListening] = useState(false)
+  const isAutoListeningRef = useRef(false)
   const [currentTranscript, setCurrentTranscript] = useState("")
   const [subtitles, setSubtitles] = useState("")
   const [debugInfo, setDebugInfo] = useState<string[]>([])
@@ -48,44 +57,15 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
     setDebugInfo((prev) => [...prev.slice(-4), `${new Date().toLocaleTimeString()}: ${message}`])
   }, [])
 
-  const processAudioBlob = useCallback(
-    async (audioBlob: Blob) => {
-      try {
-        addDebugLog("Processing recorded audio...")
-
-        const realisticTranscriptions = [
-          "Olá, tudo bem?",
-          "Estou bem, obrigado.",
-          "Como foi seu dia?",
-          "Gosto de estudar português.",
-          "Muito prazer.",
-          "Sou do Brasil.",
-          "Trabalho como professor.",
-          "Tenho vinte anos.",
-          "Moro em São Paulo.",
-          "Gosto de música.",
-        ]
-
-        await new Promise((resolve) => setTimeout(resolve, 1000))
-
-        const transcript = realisticTranscriptions[Math.floor(Math.random() * realisticTranscriptions.length)]
-        addDebugLog(`Audio processed successfully: "${transcript}"`)
-
-        setCurrentTranscript(transcript)
-        generateResponse(transcript)
-      } catch (error) {
-        addDebugLog(`Error processing audio: ${error}`)
-      }
-    },
-    [addDebugLog],
-  )
+  // Forward declaration - will be defined after generateResponse
+  let processAudioBlob: any
 
   const startVoiceActivityDetection = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       streamRef.current = stream
 
-      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)()
+      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)()
       analyserRef.current = audioContextRef.current.createAnalyser()
       microphoneRef.current = audioContextRef.current.createMediaStreamSource(stream)
 
@@ -97,8 +77,11 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
       const dataArray = new Uint8Array(bufferLength)
 
       let silenceCount = 0
-      const SILENCE_THRESHOLD = 30
-      const SILENCE_DURATION = 30 // 3 seconds of silence
+      let speechCount = 0
+      const SILENCE_THRESHOLD = 10 // Lower threshold for better silence detection  
+      const SPEECH_THRESHOLD = 15 // Much lower threshold to detect speech easier
+      const SILENCE_DURATION = 8 // 0.8 seconds of silence to stop (very fast)
+      const SPEECH_DURATION = 2 // Need 2 frames of speech to start (faster)
 
       vadIntervalRef.current = setInterval(() => {
         if (!analyserRef.current) return
@@ -108,14 +91,36 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
 
         setVoiceActivity(average)
 
-        if (average < SILENCE_THRESHOLD) {
-          silenceCount++
-          if (silenceCount >= SILENCE_DURATION && isRecording) {
-            addDebugLog("Silence detected - ending voice input")
-            stopVoiceInput()
+        // Add debug logging every 10 frames (1 second) - but only if state changed or debugging needed
+        const currentTime = Date.now()
+        if (currentTime % 1000 < 100) {
+          addDebugLog(`Voice level: ${average.toFixed(1)}, AutoListening: ${isAutoListeningRef.current}, Recording: ${isRecording}, AgentSpeaking: ${isAgentSpeaking}`)
+        }
+        
+        if (isAutoListeningRef.current && !isAgentSpeaking) {
+          if (average > SPEECH_THRESHOLD) {
+            speechCount++
+            silenceCount = 0
+            
+            // Start recording after detecting speech - but only once
+            if (speechCount >= SPEECH_DURATION && !isRecordingRef.current) {
+              addDebugLog(`Speech detected (${average.toFixed(1)}) - starting recording`)
+              startRecording()
+            }
+          } else if (average < SILENCE_THRESHOLD) {
+            silenceCount++
+            speechCount = 0
+            
+            // Stop recording after silence
+            if (silenceCount >= SILENCE_DURATION && isRecordingRef.current) {
+              addDebugLog(`Silence detected (${average.toFixed(1)}) - ending voice input`)
+              stopRecording()
+            }
+          } else {
+            // Reset counters for medium activity
+            speechCount = Math.max(0, speechCount - 1)
+            silenceCount = Math.max(0, silenceCount - 1)
           }
-        } else {
-          silenceCount = 0
         }
       }, 100)
 
@@ -140,7 +145,7 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       addDebugLog(`Failed to start voice activity detection: ${error}`)
     }
-  }, [addDebugLog, isRecording, processAudioBlob])
+  }, [addDebugLog, isRecording, isAutoListening, isAgentSpeaking, processAudioBlob])
 
   const stopVoiceActivityDetection = useCallback(() => {
     if (vadIntervalRef.current) {
@@ -166,38 +171,63 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
     setVoiceActivity(0)
   }, [])
 
-  const startVoiceInput = useCallback(async () => {
-    if (isRecording || isAgentSpeaking) {
-      addDebugLog("Cannot start voice input - already active or agent speaking")
+  const startRecording = useCallback(() => {
+    if (isRecordingRef.current || isAgentSpeaking) {
       return
     }
 
     try {
-      await startVoiceActivityDetection()
-
       if (mediaRecorderRef.current && mediaRecorderRef.current.state === "inactive") {
         audioChunksRef.current = []
         mediaRecorderRef.current.start(100) // Collect data every 100ms
 
         setIsRecording(true)
-        addDebugLog("Voice recording started - speak now (will auto-stop after silence)")
+        isRecordingRef.current = true
+        addDebugLog("Auto-recording started - speak now")
       }
     } catch (error) {
-      addDebugLog(`Failed to start voice input: ${error}`)
+      addDebugLog(`Failed to start recording: ${error}`)
       setIsRecording(false)
-      stopVoiceActivityDetection()
+      isRecordingRef.current = false
     }
-  }, [addDebugLog, isAgentSpeaking, isRecording, startVoiceActivityDetection])
+  }, [addDebugLog, isAgentSpeaking])
 
-  const stopVoiceInput = useCallback(() => {
+  const stopRecording = useCallback(() => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
       mediaRecorderRef.current.stop()
-      addDebugLog("Voice input stopped manually")
+      addDebugLog("Auto-recording stopped")
     }
-
     setIsRecording(false)
-    stopVoiceActivityDetection()
-  }, [addDebugLog, stopVoiceActivityDetection])
+    isRecordingRef.current = false
+  }, [addDebugLog])
+
+  const startVoiceInput = useCallback(async () => {
+    // This method is kept for compatibility but now just enables auto-listening
+    if (!isAutoListening) {
+      setIsAutoListening(true)
+      addDebugLog("Auto-listening enabled")
+    }
+  }, [addDebugLog, isAutoListening])
+
+  const stopVoiceInput = useCallback(() => {
+    setIsAutoListening(false)
+    isAutoListeningRef.current = false
+    stopRecording()
+    addDebugLog("Auto-listening disabled")
+  }, [addDebugLog, stopRecording])
+
+  const enableAutoListening = useCallback(() => {
+    setIsAutoListening(true)
+    addDebugLog("Auto-listening enabled")
+    
+    // Add a verification check
+    setTimeout(() => {
+      setIsAutoListening(prev => {
+        addDebugLog(`AutoListening verification: ${prev}`)
+        return prev
+      })
+    }, 100)
+  }, [addDebugLog])
 
   const speakText = useCallback(
     (text: string) => {
@@ -206,18 +236,25 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
 
         const utterance = new SpeechSynthesisUtterance(text)
         utterance.lang = "pt-BR"
-        utterance.rate = 0.8
+        utterance.rate = 0.9 // Slightly faster speech for better flow
         utterance.pitch = 1
 
         utterance.onstart = () => {
           setIsAgentSpeaking(true)
-          addDebugLog("Agent started speaking")
+          setIsAutoListening(false)
+          isAutoListeningRef.current = false
+          addDebugLog("Agent started speaking - auto-listening paused")
         }
 
         utterance.onend = () => {
           setIsAgentSpeaking(false)
           addDebugLog("Agent finished speaking")
           setIsListening(true)
+          
+          // Resume auto-listening using ref for immediate effect
+          isAutoListeningRef.current = true
+          setIsAutoListening(true)
+          addDebugLog("Auto-listening force enabled after agent finished")
         }
 
         synthesisRef.current = utterance
@@ -225,8 +262,82 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
         setSubtitles(text)
       }
     },
-    [addDebugLog],
+    [addDebugLog, enableAutoListening],
   )
+
+  const getContextualResponse = (userMessage: string): string[] => {
+    // Greeting responses
+    if (userMessage.includes('olá') || userMessage.includes('oi') || userMessage.includes('bom dia') || userMessage.includes('boa tarde')) {
+      return [
+        'Olá! Como você está hoje?',
+        'Oi! Que bom te ver aqui. Como foi seu dia?',
+        'Olá! Está tudo bem com você?'
+      ]
+    }
+    
+    // Feeling responses
+    if (userMessage.includes('bem') || userMessage.includes('bom') || userMessage.includes('ótimo')) {
+      return [
+        'Que bom! O que você gosta de fazer no seu tempo livre?',
+        'Fico feliz em saber! Conte-me sobre seus hobbies.',
+        'Excelente! Qual é sua comida brasileira favorita?'
+      ]
+    }
+    
+    // Music responses
+    if (userMessage.includes('música') || userMessage.includes('cantar') || userMessage.includes('samba')) {
+      return [
+        'Que legal! Qual estilo de música brasileira você mais gosta?',
+        'Música é maravilhosa! Você conhece algum cantor brasileiro?',
+        'Adoro música também! Você sabe dançar samba?'
+      ]
+    }
+    
+    // Food responses
+    if (userMessage.includes('comida') || userMessage.includes('comer') || userMessage.includes('feijoada')) {
+      return [
+        'Hmm, delicioso! Qual prato brasileiro você mais gosta?',
+        'Que bom! Você já experimentou feijoada?',
+        'Comida brasileira é incrível! Você cozinha?'
+      ]
+    }
+    
+    // Study responses
+    if (userMessage.includes('estudar') || userMessage.includes('português') || userMessage.includes('aprender')) {
+      return [
+        'Muito bem! Há quanto tempo você estuda português?',
+        'Que dedicação! O que mais gosta na língua portuguesa?',
+        'Parabéns! Por que decidiu aprender português?'
+      ]
+    }
+    
+    // Work responses
+    if (userMessage.includes('trabalho') || userMessage.includes('trabalhar') || userMessage.includes('emprego')) {
+      return [
+        'Interessante! Em que área você trabalha?',
+        'Que legal! Você gosta do seu trabalho?',
+        'Trabalho é importante! Onde você trabalha?'
+      ]
+    }
+    
+    // Travel responses
+    if (userMessage.includes('viajar') || userMessage.includes('brasil') || userMessage.includes('cidade')) {
+      return [
+        'Que aventura! Qual cidade brasileira você quer visitar?',
+        'Viagem é ótima! Você já esteve no Brasil?',
+        'Adoraria saber mais! Que lugar você mais quer conhecer?'
+      ]
+    }
+    
+    // Default encouraging responses
+    return [
+      'Muito interessante! Pode me contar mais sobre isso?',
+      'Que legal! Como você se sente sobre isso?',
+      'Entendi! O que mais você gostaria de compartilhar?',
+      'Que bom saber isso! E o que você acha?',
+      'Interessante! Você pode explicar melhor?'
+    ]
+  }
 
   const generateResponse = useCallback(
     async (userMessage: string) => {
@@ -241,56 +352,83 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
 
         setTimeout(() => {
           speakText(response)
-        }, 1000)
+        }, 100)
       } catch (error) {
         addDebugLog(`Error generating response: ${error}`)
         const fallback = "Desculpe, não entendi bem. Pode repetir?"
         setTimeout(() => {
           speakText(fallback)
-        }, 1000)
+        }, 100)
       }
     },
     [addDebugLog, speakText, stopVoiceInput, isRecording],
   )
 
+  // Now define processAudioBlob after generateResponse
+  processAudioBlob = useCallback(
+    async (audioBlob: Blob) => {
+      try {
+        addDebugLog("Starting real-time speech recognition...")
+        
+        if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+          addDebugLog("Speech recognition not supported in this browser")
+          // Fallback to mock for unsupported browsers
+          const transcript = "Desculpe, não consegui entender"
+          setCurrentTranscript(transcript)
+          generateResponse(transcript)
+          return
+        }
+
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+        const recognition = new SpeechRecognition()
+        
+        recognition.lang = 'pt-BR' // Portuguese (Brazil)
+        recognition.continuous = false
+        recognition.interimResults = false
+        recognition.maxAlternatives = 1
+
+        recognition.onresult = (event: any) => {
+          const transcript = event.results[0][0].transcript
+          addDebugLog(`Speech recognized: "${transcript}"`)
+          setCurrentTranscript(transcript)
+          generateResponse(transcript)
+        }
+
+        recognition.onerror = (event: any) => {
+          addDebugLog(`Speech recognition error: ${event.error}`)
+          // Fallback response
+          const transcript = "Não consegui entender, pode repetir?"
+          setCurrentTranscript(transcript)
+          generateResponse(transcript)
+        }
+
+        recognition.onend = () => {
+          addDebugLog("Speech recognition ended")
+        }
+
+        recognition.start()
+        
+      } catch (error) {
+        addDebugLog(`Error with speech recognition: ${error}`)
+        // Fallback response
+        const transcript = "Erro de reconhecimento de voz"
+        setCurrentTranscript(transcript)
+        generateResponse(transcript)
+      }
+    },
+    [addDebugLog, generateResponse],
+  )
+
   const generateAIResponse = async (userMessage: string): Promise<string> => {
     try {
-      const { text } = await generateText({
-        model: openai("gpt-4o-mini"),
-        messages: [
-          {
-            role: "system",
-            content: `You are a Brazilian Portuguese conversation tutor. Your role is to:
-- Keep the conversation focused on simple, everyday topics (greetings, food, hobbies, travel, family, work, studies)
-- Always ask 1 short question back to the user in Portuguese, related to what they just said
-- Keep responses under 2 sentences maximum
-- Do NOT change the subject randomly - build on what the user said
-- If the user makes a mistake, gently rephrase the sentence correctly first, then continue
-- Use simple vocabulary and grammar appropriate for language learners
-- Be encouraging and patient
-- Always respond in Brazilian Portuguese
-- Keep the conversation natural and flowing
-
-Examples:
-User: "Gosto de música brasileira"
-You: "Que legal! Qual cantor brasileiro você mais gosta?"
-
-User: "Estou estudando português"
-You: "Muito bem! Há quanto tempo você estuda?"
-
-User: "Moro no Rio"
-You: "Que cidade linda! O que você mais gosta no Rio?"`,
-          },
-          {
-            role: "user",
-            content: userMessage,
-          },
-        ],
-        maxTokens: 100,
-        temperature: 0.7,
-      })
-
-      return text.trim()
+      // Simple local AI response system - free and offline
+      const responses = getContextualResponse(userMessage.toLowerCase())
+      
+      // Near-instant response for snappy conversation
+      await new Promise(resolve => setTimeout(resolve, 50))
+      
+      const randomResponse = responses[Math.floor(Math.random() * responses.length)]
+      return randomResponse
     } catch (error) {
       console.error("AI generation failed:", error)
       throw error
@@ -312,16 +450,22 @@ You: "Que cidade linda! O que você mais gosta no Rio?"`,
     try {
       addDebugLog("Starting conversation")
       setIsConnected(true)
-
+      
+      // Start voice activity detection immediately
+      await startVoiceActivityDetection()
+      
       setTimeout(() => {
         const greeting =
-          "Olá! Bem-vindo ao seu tutor de português brasileiro. Vamos praticar juntos! Como você está se sentindo hoje?"
+          "Olá! Bem-vindo ao seu tutor de português brasileiro. Vamos praticar juntos! Como você está hoje?"
         speakText(greeting)
+        
+        // Ensure auto-listening will be enabled after greeting
+        addDebugLog("Conversation started - auto-listening will activate after greeting")
       }, 500)
     } catch (error) {
       addDebugLog(`Failed to start conversation: ${error}`)
     }
-  }, [addDebugLog, speakText])
+  }, [addDebugLog, speakText, startVoiceActivityDetection])
 
   const stopConversation = useCallback(() => {
     addDebugLog("Stopping conversation")
@@ -330,19 +474,19 @@ You: "Que cidade linda! O que você mais gosta no Rio?"`,
       window.speechSynthesis.cancel()
     }
 
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
-      mediaRecorderRef.current.stop()
-    }
-
+    setIsAutoListening(false)
+    isAutoListeningRef.current = false
+    stopRecording()
     stopVoiceActivityDetection()
 
     setIsConnected(false)
     setIsListening(false)
     setIsAgentSpeaking(false)
     setIsRecording(false)
+    isRecordingRef.current = false
     setCurrentTranscript("")
     setSubtitles("")
-  }, [addDebugLog, stopVoiceActivityDetection])
+  }, [addDebugLog, stopVoiceActivityDetection, stopRecording])
 
   const value: VoiceContextType = {
     isListening,
