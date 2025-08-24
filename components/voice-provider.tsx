@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import { createContext, useContext, useState, useRef, useCallback } from "react"
+import { createContext, useContext, useState, useRef, useCallback, useEffect } from "react"
 
 // TypeScript declarations for Web Speech API
 declare global {
@@ -41,6 +41,31 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
   const [subtitles, setSubtitles] = useState("")
   const [debugInfo, setDebugInfo] = useState<string[]>([])
   const [voiceActivity, setVoiceActivity] = useState(0)
+
+  // Cleanup speech synthesis on component mount and unmount
+  useEffect(() => {
+    // Cancel any existing speech synthesis on mount
+    if (window.speechSynthesis) {
+      window.speechSynthesis.cancel()
+    }
+
+    // Add event listener for page refresh/navigation
+    const handleBeforeUnload = () => {
+      if (window.speechSynthesis) {
+        window.speechSynthesis.cancel()
+      }
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+
+    // Cleanup function for component unmount
+    return () => {
+      if (window.speechSynthesis) {
+        window.speechSynthesis.cancel()
+      }
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+    }
+  }, [])
 
   const synthesisRef = useRef<SpeechSynthesisUtterance | null>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
