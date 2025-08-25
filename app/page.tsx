@@ -58,6 +58,26 @@ export default function PortugueseTutor() {
       {/* Background decoration */}
       <div className="absolute inset-0 opacity-20 bg-[radial-gradient(circle_at_50%_50%,rgba(156,146,172,0.1)_2px,transparent_2px)] [background-size:60px_60px]"></div>
       
+      {/* Full width animated waves when agent is speaking */}
+      {isAgentSpeaking && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div className="w-full flex justify-center items-end space-x-2 px-8">
+            {[...Array(30)].map((_, i) => (
+              <div
+                key={i}
+                className="bg-gradient-to-t from-green-400/30 to-emerald-500/20 rounded-full animate-pulse"
+                style={{
+                  width: '3px',
+                  height: `${Math.random() * 60 + 20}px`,
+                  animationDelay: `${i * 0.05}s`,
+                  animationDuration: `${0.8 + Math.random() * 0.4}s`
+                }}
+              ></div>
+            ))}
+          </div>
+        </div>
+      )}
+      
       {/* Debug Panel - Toggle */}
       <button
         onClick={() => setShowDebug(!showDebug)}
@@ -87,162 +107,115 @@ export default function PortugueseTutor() {
       )}
 
       <div className="flex flex-col items-center justify-center min-h-screen p-4 relative z-10">
-        {!isConnected ? (
-          // Welcome Screen
-          <div className="text-center space-y-12 max-w-4xl">
-            {/* Header */}
-            <div className="space-y-6">
-              <div className="relative">
-                <h1 className="text-6xl md:text-7xl font-bold bg-gradient-to-r from-white via-blue-100 to-purple-100 bg-clip-text text-transparent leading-tight">
-                  Bate-Papo
-                </h1>
-                <div className="absolute -top-2 -right-2 text-2xl animate-bounce">🇧🇷</div>
-              </div>
-              <p className="text-xl md:text-2xl text-white/80 max-w-3xl leading-relaxed">
-                Seu tutor de <span className="text-yellow-300 font-semibold">português brasileiro</span> com IA. 
-                Converse naturalmente e melhore sua fluência através de diálogos reais.
-              </p>
+        <div className="w-full max-w-4xl space-y-8">
+          {/* Header */}
+          <div className="text-center space-y-4">
+            <div className="relative">
+              <h1 className="text-4xl md:text-5xl font-bold bg-gradient-to-r from-white via-blue-100 to-purple-100 bg-clip-text text-transparent">
+                Bate-Papo 🇧🇷
+              </h1>
+            </div>
+            <p className="text-lg text-white/70">
+              Tutor de português brasileiro
+            </p>
+          </div>
+
+          {/* Status and Controls */}
+          <div className="text-center space-y-6">
+            <div className="flex justify-center items-center space-x-4">
+              <div className={`w-3 h-3 rounded-full bg-gradient-to-r ${getStatusColor()} ${isConnected ? 'animate-pulse' : ''}`}></div>
+              <span className="text-white/90 text-lg">
+                {isConnected ? getStatusMessage() : "Clique para começar"}
+              </span>
             </div>
 
-            {/* Features */}
-            <div className="grid md:grid-cols-3 gap-6 text-white/70">
-              <div className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-2xl p-6 hover:bg-white/15 transition-all">
-                <MessageCircle className="w-8 h-8 text-blue-400 mb-3 mx-auto" />
-                <h3 className="font-semibold text-white mb-2">Conversas Naturais</h3>
-                <p className="text-sm">Pratique português em diálogos fluidos e contextualizados</p>
-              </div>
-              <div className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-2xl p-6 hover:bg-white/15 transition-all">
-                <Zap className="w-8 h-8 text-yellow-400 mb-3 mx-auto" />
-                <h3 className="font-semibold text-white mb-2">Detecção Automática</h3>
-                <p className="text-sm">Fale naturalmente - sua voz é detectada automaticamente</p>
-              </div>
-              <div className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-2xl p-6 hover:bg-white/15 transition-all">
-                <Heart className="w-8 h-8 text-pink-400 mb-3 mx-auto" />
-                <h3 className="font-semibold text-white mb-2">Aprendizado Gentil</h3>
-                <p className="text-sm">Correções naturais que não interrompem a conversa</p>
-              </div>
-            </div>
+            {/* Main Control Button */}
+            <Button
+              onClick={isConnected ? stopConversation : startConversation}
+              size="lg"
+              className={`px-12 py-6 text-xl rounded-full shadow-2xl transition-all duration-300 transform hover:scale-105 border border-white/20 ${
+                isConnected 
+                  ? "bg-gradient-to-r from-red-500 to-pink-600 hover:from-red-600 hover:to-pink-700" 
+                  : "bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700"
+              } text-white`}
+            >
+              {isConnected ? (
+                <>
+                  <Volume2 className="mr-3 h-6 w-6" />
+                  Parar Conversa
+                </>
+              ) : (
+                <>
+                  <Mic className="mr-3 h-6 w-6" />
+                  Começar
+                </>
+              )}
+            </Button>
+          </div>
 
-            {/* CTA Button */}
-            <div className="space-y-6">
-              <Button
-                onClick={startConversation}
-                size="lg"
-                className="px-16 py-6 text-xl bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white rounded-full shadow-2xl hover:shadow-blue-500/25 transition-all duration-300 transform hover:scale-105 border border-white/20"
-              >
-                <Mic className="mr-3 h-6 w-6" />
-                Começar Conversa
-              </Button>
-              <p className="text-white/60 text-sm">
-                🎤 Acesso ao microfone necessário para conversas automáticas
-              </p>
+          {/* Voice Visualizer */}
+          <div className="flex justify-center">
+            <div className="relative">
+              {isRecording ? (
+                <div className="flex items-center space-x-3">
+                  <div className={`w-3 h-3 rounded-full bg-red-400 animate-pulse`}></div>
+                  <Mic className="w-6 h-6 text-white/70" />
+                  <div className={`w-3 h-3 rounded-full bg-red-400 animate-pulse`} style={{animationDelay: '0.2s'}}></div>
+                </div>
+              ) : isAgentSpeaking ? (
+                <div className="flex items-center space-x-2">
+                  <Volume2 className="w-6 h-6 text-green-400" />
+                  <span className="text-white/60 text-sm">Falando...</span>
+                </div>
+              ) : (
+                <div className="flex items-center space-x-2">
+                  <div className={`w-2 h-2 rounded-full bg-blue-400`}></div>
+                  <span className="text-white/60 text-sm">Aguardando</span>
+                </div>
+              )}
             </div>
           </div>
-        ) : (
-          // Conversation Screen
-          <div className="w-full max-w-5xl space-y-8">
-            {/* Status Header */}
-            <div className="text-center space-y-4">
-              <div className="flex justify-center items-center space-x-4">
-                <div className={`w-4 h-4 rounded-full bg-gradient-to-r ${getStatusColor()} animate-pulse shadow-lg`}></div>
-                <h2 className="text-2xl font-semibold text-white">
-                  {getStatusMessage()}
-                </h2>
-              </div>
-              
-              {/* Conversation Counter */}
-              <div className="flex justify-center items-center space-x-6 text-white/70">
-                <div className="flex items-center space-x-2">
-                  <Star className="w-4 h-4 text-yellow-400" />
-                  <span className="text-sm">{conversationCount} trocas</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Volume2 className="w-4 h-4 text-blue-400" />
-                  <span className="text-sm">Português BR</span>
-                </div>
-              </div>
-            </div>
 
-            {/* Voice Activity Visualizer */}
-            <div className="flex justify-center">
-              <div className="relative">
-                <div className={`w-32 h-32 rounded-full bg-gradient-to-r ${getStatusColor()} p-1 ${isRecording ? 'animate-pulse' : ''} shadow-2xl`}>
-                  <div className="w-full h-full bg-black/20 backdrop-blur-sm rounded-full flex items-center justify-center border border-white/20">
-                    {isRecording ? (
-                      <div className="w-12 h-12 bg-white rounded-full animate-ping opacity-75"></div>
-                    ) : isAgentSpeaking ? (
-                      <Volume2 className="w-12 h-12 text-white animate-pulse" />
-                    ) : (
-                      <Mic className="w-12 h-12 text-white" />
-                    )}
-                  </div>
-                </div>
-                
-                {/* Voice activity rings */}
-                {isRecording && (
-                  <div className="absolute inset-0 rounded-full border-2 border-white/30 animate-ping"></div>
-                )}
-              </div>
-            </div>
 
-            {/* Subtitles Display */}
-            <div className="bg-black/30 backdrop-blur-sm border border-white/20 rounded-2xl p-8 min-h-[150px] flex items-center justify-center shadow-2xl">
-              <p className="text-2xl md:text-3xl leading-relaxed font-medium text-center text-white">
-                {subtitles || "Preparando sua primeira pergunta..."}
+          {/* Subtitles */}
+          <div className="bg-black/30 backdrop-blur-sm border border-white/20 rounded-2xl p-6 min-h-[120px] flex items-center justify-center">
+            <p className="text-xl md:text-2xl text-center text-white leading-relaxed">
+              {isConnected ? (subtitles || "Preparando...") : "Clique em 'Começar' para iniciar a conversa"}
+            </p>
+          </div>
+
+          {/* User Transcript */}
+          {currentTranscript && (
+            <div className="bg-blue-500/20 backdrop-blur-sm border border-blue-300/30 rounded-xl p-4">
+              <p className="text-white text-center">
+                <span className="text-blue-300">Você:</span> "{currentTranscript}"
               </p>
             </div>
+          )}
 
-            {/* User Transcript */}
-            {currentTranscript && (
-              <div className="bg-gradient-to-r from-blue-500/20 to-purple-500/20 backdrop-blur-sm border border-blue-300/30 rounded-2xl p-6 shadow-xl">
-                <div className="flex items-start space-x-3">
-                  <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center flex-shrink-0 mt-1">
-                    <span className="text-white text-sm font-bold">Você</span>
-                  </div>
-                  <p className="text-lg text-white flex-1 leading-relaxed">
-                    "{currentTranscript}"
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {/* Quick Text Input */}
-            <div className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-2xl p-6 shadow-xl">
-              <form onSubmit={handleTextSubmit} className="flex space-x-4">
+          {/* Quick Text Input */}
+          {isConnected && (
+            <div className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl p-4">
+              <form onSubmit={handleTextSubmit} className="flex space-x-3">
                 <Input
                   type="text"
-                  placeholder="Ou digite sua mensagem aqui..."
+                  placeholder="Ou digite..."
                   value={textInput}
                   onChange={(e) => setTextInput(e.target.value)}
-                  className="flex-1 bg-white/10 border-white/30 text-white placeholder-white/60 focus:border-blue-400 focus:ring-blue-400/20"
+                  className="flex-1 bg-white/10 border-white/30 text-white placeholder-white/60"
                   disabled={isAgentSpeaking}
                 />
                 <Button
                   type="submit"
                   disabled={!textInput.trim() || isAgentSpeaking}
-                  className="bg-blue-500 hover:bg-blue-600 text-white px-6"
+                  className="bg-blue-500 hover:bg-blue-600"
                 >
-                  Enviar
+                  →
                 </Button>
               </form>
-              <p className="text-white/50 text-xs mt-2 text-center">
-                💡 Dica: Você pode falar naturalmente ou digitar
-              </p>
             </div>
-
-            {/* Control Panel */}
-            <div className="flex justify-center space-x-4">
-              <Button
-                onClick={stopConversation}
-                variant="outline"
-                size="lg"
-                className="px-8 py-4 text-lg border-2 border-red-400/50 text-red-300 hover:bg-red-500/20 bg-transparent backdrop-blur-sm hover:border-red-400 transition-all"
-              >
-                Finalizar Conversa
-              </Button>
-            </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   )

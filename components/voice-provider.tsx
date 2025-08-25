@@ -41,6 +41,104 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
   const [subtitles, setSubtitles] = useState("")
   const [debugInfo, setDebugInfo] = useState<string[]>([])
   const [voiceActivity, setVoiceActivity] = useState(0)
+  const [bestVoice, setBestVoice] = useState<SpeechSynthesisVoice | null>(null)
+  
+  // Real-time speech recognition refs
+  const recognitionRef = useRef<any>(null)
+  const isRecognitionActiveRef = useRef(false)
+  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const lastTranscriptRef = useRef<string>('')
+  const isConnectedRef = useRef(false)
+
+  // Get best available Portuguese voice based on priority list  
+  const getBestPortugueseVoice = useCallback((logFunction?: (msg: string) => void): SpeechSynthesisVoice | null => {
+    if (!("speechSynthesis" in window)) return null
+
+    const voices = window.speechSynthesis.getVoices()
+    if (voices.length === 0) return null
+
+    // Priority list for Brazilian Portuguese voices
+    const voicePriority = [
+      // Microsoft voices
+      /microsoft francisca/i,
+      /francisca/i,
+      // Google voices
+      /google português do brasil/i,
+      /português.*brasil/i,
+      /brazilian/i,
+      // Other Portuguese voices
+      /luciana/i,
+      /paulina/i,
+      // Fallback to any Portuguese voice
+      /pt-br/i,
+      /portuguese.*brazil/i,
+      /portuguese/i
+    ]
+
+    // Find the best voice based on priority
+    for (const pattern of voicePriority) {
+      const voice = voices.find(v => 
+        pattern.test(v.name) && (v.lang.includes('pt-BR') || v.lang.includes('pt'))
+      )
+      if (voice) {
+        logFunction?.(`Selected voice: ${voice.name} (${voice.lang})`)
+        return voice
+      }
+    }
+
+    // Final fallback to any Portuguese voice
+    const fallbackVoice = voices.find(v => v.lang.includes('pt'))
+    if (fallbackVoice) {
+      logFunction?.(`Fallback voice: ${fallbackVoice.name} (${fallbackVoice.lang})`)
+      return fallbackVoice
+    }
+
+    logFunction?.("No Portuguese voice found, using default")
+    return null
+  }, [])
+
+  // Voice loading useEffect to initialize best voice
+  useEffect(() => {
+    if (!("speechSynthesis" in window)) return
+
+    const loadVoices = () => {
+      const voice = getBestPortugueseVoice()
+      if (voice && voice !== bestVoice) {
+        setBestVoice(voice)
+      }
+    }
+
+    // Load voices immediately if available
+    loadVoices()
+
+    // Listen for voices loaded event (some browsers load asynchronously)
+    const handleVoicesChanged = () => {
+      loadVoices()
+    }
+
+    window.speechSynthesis.addEventListener('voiceschanged', handleVoicesChanged)
+
+    return () => {
+      window.speechSynthesis.removeEventListener('voiceschanged', handleVoicesChanged)
+    }
+  }, [getBestPortugueseVoice, bestVoice])
+
+  // Cleanup real-time speech recognition
+  useEffect(() => {
+    return () => {
+      // Clear any pending silence timer
+      if (silenceTimerRef.current) {
+        clearTimeout(silenceTimerRef.current)
+        silenceTimerRef.current = null
+      }
+      
+      // Stop recognition
+      if (recognitionRef.current && isRecognitionActiveRef.current) {
+        recognitionRef.current.stop()
+        isRecognitionActiveRef.current = false
+      }
+    }
+  }, [])
 
   // Cleanup speech synthesis on component mount and unmount
   useEffect(() => {
@@ -81,6 +179,54 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
     console.log(`[v0] ${message}`)
     setDebugInfo((prev) => [...prev.slice(-4), `${new Date().toLocaleTimeString()}: ${message}`])
   }, [])
+
+  // Keep isConnectedRef in sync and debug connection changes
+  useEffect(() => {
+    isConnectedRef.current = isConnected
+    addDebugLog(`🔗 Connection state changed: ${isConnected}`)
+  }, [isConnected, addDebugLog])
+
+  // Forward declarations for mutual dependencies
+  let startRealTimeSpeechRecognition: () => boolean
+
+  // Silence detection for speech processing
+  const handleSpeechSilence = useCallback((transcript: string) => {
+    // Clear any existing timer
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current)
+    }
+
+    // Set a timer to process speech after 2.5 seconds of silence
+    silenceTimerRef.current = setTimeout(() => {
+      const timestamp = new Date().toISOString()
+      
+      // CONSOLE LOG: User stopped speaking (silence detected)
+      console.log(`🛑 [${timestamp}] USER STOPPED SPEAKING - Silence detected after pause, processing: "${transcript}"`)
+      
+      addDebugLog(`⏸️ Silence detected after 2.5s - processing speech: "${transcript}"`)
+      setCurrentTranscript(transcript)
+      
+      // Stop recognition and process response
+      stopRealTimeSpeechRecognition()
+      generateResponse(transcript)
+    }, 2500) // 2.5 second silence threshold - more patient!
+  }, [addDebugLog])
+
+  const stopRealTimeSpeechRecognition = useCallback(() => {
+    // Clear any pending silence timer
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current)
+      silenceTimerRef.current = null
+    }
+    
+    if (recognitionRef.current && isRecognitionActiveRef.current) {
+      addDebugLog("⏹️ Stopping speech recognition")
+      recognitionRef.current.stop()
+      isRecognitionActiveRef.current = false
+      setIsListening(false)
+      setIsRecording(false)
+    }
+  }, [addDebugLog])
 
   // Forward declaration - will be defined after generateResponse
   let processAudioBlob: any
@@ -227,19 +373,22 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
   }, [addDebugLog])
 
   const startVoiceInput = useCallback(async () => {
-    // This method is kept for compatibility but now just enables auto-listening
-    if (!isAutoListening) {
+    // Start real-time speech recognition
+    if (!isRecognitionActiveRef.current) {
       setIsAutoListening(true)
-      addDebugLog("Auto-listening enabled")
+      isAutoListeningRef.current = true
+      startRealTimeSpeechRecognition()
+      addDebugLog("🎤 Real-time recognition enabled")
     }
-  }, [addDebugLog, isAutoListening])
+  }, [addDebugLog, startRealTimeSpeechRecognition])
 
   const stopVoiceInput = useCallback(() => {
+    // Stop real-time speech recognition
     setIsAutoListening(false)
     isAutoListeningRef.current = false
-    stopRecording()
-    addDebugLog("Auto-listening disabled")
-  }, [addDebugLog, stopRecording])
+    stopRealTimeSpeechRecognition()
+    addDebugLog("🛑 Real-time recognition disabled")
+  }, [addDebugLog, stopRealTimeSpeechRecognition])
 
   const enableAutoListening = useCallback(() => {
     setIsAutoListening(true)
@@ -260,26 +409,81 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
         window.speechSynthesis.cancel()
 
         const utterance = new SpeechSynthesisUtterance(text)
-        utterance.lang = "pt-BR"
+        
+        // Use best available Portuguese voice
+        if (bestVoice) {
+          utterance.voice = bestVoice
+          utterance.lang = bestVoice.lang
+        } else {
+          // Fallback to getBestPortugueseVoice if bestVoice not set
+          const voice = getBestPortugueseVoice(addDebugLog)
+          if (voice) {
+            utterance.voice = voice
+            utterance.lang = voice.lang
+            setBestVoice(voice) // Cache for next time
+          } else {
+            utterance.lang = "pt-BR"
+          }
+        }
+        
         utterance.rate = 0.9 // Slightly faster speech for better flow
         utterance.pitch = 1
 
         utterance.onstart = () => {
+          const ttsTimestamp = new Date().toISOString()
+          
+          // CONSOLE LOG: TTS begins
+          console.log(`🔊 [${ttsTimestamp}] TTS BEGINS - Agent started speaking: "${text}"`)
+          
           setIsAgentSpeaking(true)
+          // Stop real-time recognition while agent speaks
+          stopRealTimeSpeechRecognition()
           setIsAutoListening(false)
           isAutoListeningRef.current = false
-          addDebugLog("Agent started speaking - auto-listening paused")
+          addDebugLog("🗣️ Agent started speaking - speech recognition paused")
         }
 
         utterance.onend = () => {
-          setIsAgentSpeaking(false)
-          addDebugLog("Agent finished speaking")
-          setIsListening(true)
+          const ttsEndTimestamp = new Date().toISOString()
           
-          // Resume auto-listening using ref for immediate effect
+          // CONSOLE LOG: TTS ends
+          console.log(`🔇 [${ttsEndTimestamp}] TTS ENDS - Agent finished speaking, preparing to listen`)
+          
+          setIsAgentSpeaking(false)
+          addDebugLog("✅ Agent finished speaking")
+          
+          // Resume real-time recognition after agent finishes
           isAutoListeningRef.current = true
           setIsAutoListening(true)
-          addDebugLog("Auto-listening force enabled after agent finished")
+          
+          // Simple restart approach - just try to restart recognition
+          setTimeout(() => {
+            addDebugLog(`🔄 Attempting to restart recognition - isConnected: ${isConnectedRef.current}`)
+            
+            // Force restart recognition regardless of state checks for now
+            if (typeof startRealTimeSpeechRecognition === 'function') {
+              const success = startRealTimeSpeechRecognition()
+              if (success) {
+                console.log(`🎤 [${new Date().toISOString()}] SPEECH RECOGNITION RESTARTED - Ready to listen`)
+                addDebugLog(`✅ Speech recognition restarted successfully`)
+              } else {
+                addDebugLog(`❌ Failed to restart speech recognition`)
+                
+                // If it fails, let's try again after a bit more time
+                setTimeout(() => {
+                  const success2 = startRealTimeSpeechRecognition()
+                  if (success2) {
+                    console.log(`🎤 [${new Date().toISOString()}] SPEECH RECOGNITION RESTARTED - Ready to listen (second attempt)`)
+                    addDebugLog(`✅ Speech recognition restarted on second attempt`)
+                  } else {
+                    addDebugLog(`❌ Failed to restart speech recognition on second attempt`)
+                  }
+                }, 500)
+              }
+            } else {
+              addDebugLog(`❌ startRealTimeSpeechRecognition function not available`)
+            }
+          }, 300)
         }
 
         synthesisRef.current = utterance
@@ -287,7 +491,7 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
         setSubtitles(text)
       }
     },
-    [addDebugLog, enableAutoListening],
+    [addDebugLog, bestVoice, getBestPortugueseVoice, stopRealTimeSpeechRecognition, isConnected],
   )
 
   const getContextualResponse = (userMessage: string): string[] => {
@@ -364,101 +568,196 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
     ]
   }
 
+  const generateAIResponse = async (userMessage: string): Promise<string> => {
+    const aiStartTime = performance.now()
+    
+    try {
+      // Simple local AI response system - free and offline
+      const responses = getContextualResponse(userMessage.toLowerCase())
+      
+      // Generate response instantly - no artificial delay
+      const randomResponse = responses[Math.floor(Math.random() * responses.length)]
+      
+      const aiEndTime = performance.now()
+      addDebugLog(`⚡ AI response generated in ${(aiEndTime - aiStartTime).toFixed(1)}ms`)
+      
+      return randomResponse
+    } catch (error) {
+      const errorTime = performance.now()
+      addDebugLog(`❌ AI generation failed after ${(errorTime - aiStartTime).toFixed(1)}ms: ${error}`)
+      
+      // Ultra-fast fallback response
+      return "Desculpe, pode repetir?"
+    }
+  }
+
   const generateResponse = useCallback(
     async (userMessage: string) => {
+      const responseStartTime = performance.now()
+      const timestamp = new Date().toISOString()
+      
       try {
-        addDebugLog(`Generating AI response for: "${userMessage}"`)
+        // CONSOLE LOG: AI response generation starts
+        console.log(`🤖 [${timestamp}] AI RESPONSE STARTS - Generating response for: "${userMessage}"`)
+        
+        addDebugLog(`🤔 Generating AI response for: "${userMessage}"`)
         setIsListening(false)
         if (isRecording) {
           stopVoiceInput()
         }
 
         const response = await generateAIResponse(userMessage)
+        
+        const responseReadyTime = performance.now()
+        const responseTimestamp = new Date().toISOString()
+        
+        // CONSOLE LOG: AI response ready
+        console.log(`⚡ [${responseTimestamp}] AI RESPONSE READY - "${response}" (${(responseReadyTime - responseStartTime).toFixed(1)}ms)`)
+        
+        addDebugLog(`⚡ Response ready in ${(responseReadyTime - responseStartTime).toFixed(1)}ms`)
 
-        setTimeout(() => {
-          speakText(response)
-        }, 100)
+        // Speak immediately - no artificial delay
+        speakText(response)
+        
+        const speechStartTime = performance.now()
+        addDebugLog(`🗣️ Speech started ${(speechStartTime - responseStartTime).toFixed(1)}ms after response generation`)
+        
       } catch (error) {
-        addDebugLog(`Error generating response: ${error}`)
+        const errorTime = performance.now()
+        const errorTimestamp = new Date().toISOString()
+        
+        console.log(`❌ [${errorTimestamp}] AI RESPONSE ERROR - ${error} (${(errorTime - responseStartTime).toFixed(1)}ms)`)
+        addDebugLog(`❌ Error generating response after ${(errorTime - responseStartTime).toFixed(1)}ms: ${error}`)
+        
         const fallback = "Desculpe, não entendi bem. Pode repetir?"
-        setTimeout(() => {
-          speakText(fallback)
-        }, 100)
+        // Immediate fallback speech - no delay
+        speakText(fallback)
       }
     },
-    [addDebugLog, speakText, stopVoiceInput, isRecording],
+    [addDebugLog, stopVoiceInput, generateAIResponse],
   )
 
-  // Now define processAudioBlob after generateResponse
-  processAudioBlob = useCallback(
-    async (audioBlob: Blob) => {
-      try {
-        addDebugLog("Starting real-time speech recognition...")
-        
-        if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-          addDebugLog("Speech recognition not supported in this browser")
-          // Fallback to mock for unsupported browsers
-          const transcript = "Desculpe, não consegui entender"
-          setCurrentTranscript(transcript)
-          generateResponse(transcript)
-          return
-        }
-
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
-        const recognition = new SpeechRecognition()
-        
-        recognition.lang = 'pt-BR' // Portuguese (Brazil)
-        recognition.continuous = false
-        recognition.interimResults = false
-        recognition.maxAlternatives = 1
-
-        recognition.onresult = (event: any) => {
-          const transcript = event.results[0][0].transcript
-          addDebugLog(`Speech recognized: "${transcript}"`)
-          setCurrentTranscript(transcript)
-          generateResponse(transcript)
-        }
-
-        recognition.onerror = (event: any) => {
-          addDebugLog(`Speech recognition error: ${event.error}`)
-          // Fallback response
-          const transcript = "Não consegui entender, pode repetir?"
-          setCurrentTranscript(transcript)
-          generateResponse(transcript)
-        }
-
-        recognition.onend = () => {
-          addDebugLog("Speech recognition ended")
-        }
-
-        recognition.start()
-        
-      } catch (error) {
-        addDebugLog(`Error with speech recognition: ${error}`)
-        // Fallback response
-        const transcript = "Erro de reconhecimento de voz"
-        setCurrentTranscript(transcript)
-        generateResponse(transcript)
-      }
-    },
-    [addDebugLog, generateResponse],
-  )
-
-  const generateAIResponse = async (userMessage: string): Promise<string> => {
-    try {
-      // Simple local AI response system - free and offline
-      const responses = getContextualResponse(userMessage.toLowerCase())
-      
-      // Near-instant response for snappy conversation
-      await new Promise(resolve => setTimeout(resolve, 50))
-      
-      const randomResponse = responses[Math.floor(Math.random() * responses.length)]
-      return randomResponse
-    } catch (error) {
-      console.error("AI generation failed:", error)
-      throw error
+  // Now define startRealTimeSpeechRecognition after generateResponse
+  startRealTimeSpeechRecognition = useCallback(() => {
+    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+      addDebugLog("❌ Speech recognition not supported in this browser")
+      return false
     }
-  }
+
+    if (isRecognitionActiveRef.current) {
+      addDebugLog("🎤 Speech recognition already active")
+      return true
+    }
+
+    try {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+      recognitionRef.current = new SpeechRecognition()
+      
+      // Configure for continuous real-time recognition
+      recognitionRef.current.lang = 'pt-BR'
+      recognitionRef.current.continuous = true
+      recognitionRef.current.interimResults = true
+      recognitionRef.current.maxAlternatives = 1
+
+      recognitionRef.current.onstart = () => {
+        isRecognitionActiveRef.current = true
+        setIsListening(true)
+        setIsRecording(true)
+        addDebugLog("🎤 Real-time speech recognition started")
+      }
+
+      recognitionRef.current.onresult = (event: any) => {
+        const results = event.results
+        let interimTranscript = ''
+        let finalTranscript = ''
+
+        for (let i = 0; i < results.length; i++) {
+          const transcript = results[i][0].transcript
+          if (results[i].isFinal) {
+            finalTranscript += transcript
+          } else {
+            interimTranscript += transcript
+          }
+        }
+
+        // Get the most recent transcript (interim or final)
+        const currentTranscript = finalTranscript || interimTranscript
+
+        // Show interim results for better UX
+        if (interimTranscript) {
+          setCurrentTranscript(`${interimTranscript}...`)
+          addDebugLog(`💭 Interim: "${interimTranscript}"`)
+        }
+
+        // Handle final results immediately
+        if (finalTranscript.trim()) {
+          const cleanTranscript = finalTranscript.trim()
+          const timestamp = new Date().toISOString()
+          
+          // CONSOLE LOG: Final result received
+          console.log(`🛑 [${timestamp}] USER STOPPED SPEAKING - Final result: "${cleanTranscript}"`)
+          
+          addDebugLog(`✅ Final transcript: "${cleanTranscript}"`)
+          setCurrentTranscript(cleanTranscript)
+          
+          // Clear any silence timer since we got a final result
+          if (silenceTimerRef.current) {
+            clearTimeout(silenceTimerRef.current)
+          }
+          
+          // Process immediately
+          stopRealTimeSpeechRecognition()
+          generateResponse(cleanTranscript)
+        } else if (currentTranscript.trim() && currentTranscript !== lastTranscriptRef.current) {
+          // Update last transcript and start silence detection for interim results
+          lastTranscriptRef.current = currentTranscript.trim()
+          handleSpeechSilence(currentTranscript.trim())
+        }
+      }
+
+      recognitionRef.current.onerror = (event: any) => {
+        addDebugLog(`❌ Speech recognition error: ${event.error}`)
+        
+        // Handle specific errors
+        if (event.error === 'no-speech') {
+          addDebugLog("🔇 No speech detected, continuing to listen...")
+        } else if (event.error === 'aborted') {
+          addDebugLog("⏹️ Speech recognition aborted")
+        } else {
+          // Restart recognition on other errors
+          setTimeout(() => {
+            if (isConnected && !isAgentSpeaking) {
+              addDebugLog("🔄 Restarting speech recognition after error")
+              startRealTimeSpeechRecognition()
+            }
+          }, 1000)
+        }
+      }
+
+      recognitionRef.current.onend = () => {
+        isRecognitionActiveRef.current = false
+        setIsRecording(false)
+        addDebugLog("🛑 Speech recognition ended")
+        
+        // Auto-restart if still connected and agent not speaking
+        if (isConnected && !isAgentSpeaking && isAutoListeningRef.current) {
+          setTimeout(() => {
+            addDebugLog("🔄 Auto-restarting speech recognition")
+            startRealTimeSpeechRecognition()
+          }, 100)
+        } else {
+          setIsListening(false)
+        }
+      }
+
+      recognitionRef.current.start()
+      return true
+      
+    } catch (error) {
+      addDebugLog(`❌ Failed to start speech recognition: ${error}`)
+      return false
+    }
+  }, [addDebugLog, isConnected, isAgentSpeaking])
 
   const sendTextMessage = useCallback(
     (message: string) => {
@@ -473,37 +772,37 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
 
   const startConversation = useCallback(async () => {
     try {
-      addDebugLog("Starting conversation")
+      addDebugLog("🚀 Starting conversation with real-time recognition")
       setIsConnected(true)
       
-      // Start voice activity detection immediately
-      await startVoiceActivityDetection()
+      // Enable auto-listening for continuous recognition
+      setIsAutoListening(true)
+      isAutoListeningRef.current = true
       
-      setTimeout(() => {
-        const greeting =
-          "Olá! Bem-vindo ao seu tutor de português brasileiro. Vamos praticar juntos! Como você está hoje?"
-        speakText(greeting)
-        
-        // Ensure auto-listening will be enabled after greeting
-        addDebugLog("Conversation started - auto-listening will activate after greeting")
-      }, 500)
+      // Start with a greeting immediately  
+      const greeting = "Olá! Bem-vindo ao seu tutor de português brasileiro. Vamos praticar juntos! Como você está hoje?"
+      speakText(greeting)
+      
+      addDebugLog("✅ Conversation started - real-time recognition will activate after greeting")
     } catch (error) {
-      addDebugLog(`Failed to start conversation: ${error}`)
+      addDebugLog(`❌ Failed to start conversation: ${error}`)
     }
-  }, [addDebugLog, speakText, startVoiceActivityDetection])
+  }, [addDebugLog, speakText])
 
   const stopConversation = useCallback(() => {
-    addDebugLog("Stopping conversation")
+    addDebugLog("⏹️ Stopping conversation")
 
+    // Stop speech synthesis
     if (window.speechSynthesis) {
       window.speechSynthesis.cancel()
     }
 
+    // Stop real-time recognition
+    stopRealTimeSpeechRecognition()
+    
+    // Reset all states
     setIsAutoListening(false)
     isAutoListeningRef.current = false
-    stopRecording()
-    stopVoiceActivityDetection()
-
     setIsConnected(false)
     setIsListening(false)
     setIsAgentSpeaking(false)
@@ -511,7 +810,9 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
     isRecordingRef.current = false
     setCurrentTranscript("")
     setSubtitles("")
-  }, [addDebugLog, stopVoiceActivityDetection, stopRecording])
+    
+    addDebugLog("✅ Conversation stopped - all recognition disabled")
+  }, [addDebugLog, stopRealTimeSpeechRecognition])
 
   const value: VoiceContextType = {
     isListening,
