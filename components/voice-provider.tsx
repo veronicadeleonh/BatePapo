@@ -49,6 +49,78 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null)
   const lastTranscriptRef = useRef<string>('')
   const isConnectedRef = useRef(false)
+  
+  // Mobile detection and capabilities
+  const [isMobile, setIsMobile] = useState(false)
+  const [speechCapabilities, setSpeechCapabilities] = useState({
+    recognition: false,
+    synthesis: false,
+    vendor: 'unknown'
+  })
+
+  // Debug logging function
+  const addDebugLog = useCallback((message: string) => {
+    console.log(`[v0] ${message}`)
+    setDebugInfo((prev) => [...prev.slice(-4), `${new Date().toLocaleTimeString()}: ${message}`])
+  }, [])
+
+  // Process SSML-style pause markers for natural speech
+  const processSpeechWithPauses = useCallback(async (text: string, utteranceConfig: any) => {
+    const pauseRegex = /<pause:(\d+)ms>/g
+    const parts = text.split(pauseRegex)
+    
+    addDebugLog(`🎭 Processing speech with SSML pauses: "${text}"`)
+    
+    // Build complete text without pause markers for subtitles
+    const cleanText = text.replace(pauseRegex, '')
+    let subtitleText = ''
+    
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i]
+      
+      // Skip empty parts
+      if (!part) continue
+      
+      // If it's a pause duration (numbers only), wait
+      if (/^\d+$/.test(part)) {
+        const pauseDuration = parseInt(part, 10)
+        addDebugLog(`⏸️ SSML pause: ${pauseDuration}ms`)
+        
+        await new Promise(resolve => setTimeout(resolve, pauseDuration))
+        continue
+      }
+      
+      // If it's text content, speak it and update subtitles
+      if (part.trim()) {
+        addDebugLog(`🗣️ Speaking part: "${part.trim()}"`)
+        
+        // Update subtitles progressively to show current part being spoken
+        subtitleText += part.trim() + ' '
+        setSubtitles(subtitleText.trim())
+        
+        const utterance = new SpeechSynthesisUtterance(part.trim())
+        
+        // Apply the same configuration as the main utterance
+        if (utteranceConfig.voice) utterance.voice = utteranceConfig.voice
+        utterance.lang = utteranceConfig.lang
+        utterance.rate = utteranceConfig.rate
+        utterance.pitch = utteranceConfig.pitch
+        
+        // Wait for this part to finish before continuing
+        await new Promise<void>((resolve, reject) => {
+          utterance.onend = () => resolve()
+          utterance.onerror = (error) => {
+            addDebugLog(`❌ SSML speech error: ${error}`)
+            reject(error)
+          }
+          window.speechSynthesis.speak(utterance)
+        })
+      }
+    }
+    
+    // Ensure final subtitles show complete text
+    setSubtitles(cleanText)
+  }, [addDebugLog])
 
   // Get best available Portuguese voice based on priority list  
   const getBestPortugueseVoice = useCallback((logFunction?: (msg: string) => void): SpeechSynthesisVoice | null => {
@@ -175,16 +247,104 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
   const silenceTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const vadIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
-  const addDebugLog = useCallback((message: string) => {
-    console.log(`[v0] ${message}`)
-    setDebugInfo((prev) => [...prev.slice(-4), `${new Date().toLocaleTimeString()}: ${message}`])
-  }, [])
-
   // Keep isConnectedRef in sync and debug connection changes
   useEffect(() => {
     isConnectedRef.current = isConnected
     addDebugLog(`🔗 Connection state changed: ${isConnected}`)
   }, [isConnected, addDebugLog])
+
+  // Mobile detection and capabilities check
+  useEffect(() => {
+    const detectMobileAndCapabilities = () => {
+      // Mobile detection
+      const userAgent = navigator.userAgent || navigator.vendor || (window as any).opera
+      const mobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(userAgent)
+      setIsMobile(mobile)
+      
+      // Browser detection with Arc support
+      let vendor = 'unknown'
+      if (/Arc/i.test(userAgent) || /Arc Browser/i.test(userAgent)) {
+        vendor = 'Arc'
+      } else if (/Safari/i.test(userAgent) && /Apple/i.test(navigator.vendor)) {
+        vendor = /iPhone|iPad|iPod/i.test(userAgent) ? 'iOS Safari' : 'Safari'
+      } else if (/Chrome/i.test(userAgent) && /Google/i.test(navigator.vendor)) {
+        vendor = 'Chrome'
+      } else if (/Firefox/i.test(userAgent)) {
+        vendor = 'Firefox'
+      } else if (/Samsung/i.test(userAgent)) {
+        vendor = 'Samsung Internet'
+      } else if (/Edg/i.test(userAgent)) {
+        vendor = 'Edge'
+      } else if (/OPR/i.test(userAgent) || /Opera/i.test(userAgent)) {
+        vendor = 'Opera'
+      }
+      
+      // Additional Arc detection (Arc sometimes doesn't include "Arc" in user agent)
+      if (vendor === 'Chrome' && window.navigator && 'brave' in window.navigator) {
+        // This is actually Brave, not Arc
+        vendor = 'Brave'
+      } else if (vendor === 'Chrome' && userAgent.includes('Chromium')) {
+        // Could be Arc or other Chromium-based browser
+        // Arc often appears as Chrome but with specific characteristics
+        const isLikelyArc = (
+          !userAgent.includes('Edg') && 
+          !userAgent.includes('OPR') && 
+          !userAgent.includes('Brave') &&
+          !userAgent.includes('Vivaldi')
+        )
+        if (isLikelyArc && window.chrome) {
+          vendor = 'Arc (detected)'
+        }
+      }
+
+      // Speech recognition support
+      const recognitionSupport = !!(window.SpeechRecognition || window.webkitSpeechRecognition)
+      
+      // Speech synthesis support  
+      const synthesisSupport = !!window.speechSynthesis
+
+      const capabilities = {
+        recognition: recognitionSupport,
+        synthesis: synthesisSupport,
+        vendor
+      }
+      
+      setSpeechCapabilities(capabilities)
+      
+      // Enhanced mobile logging
+      console.log(`📱 [${new Date().toISOString()}] DEVICE DETECTION:`, {
+        isMobile: mobile,
+        browser: vendor,
+        userAgent: userAgent.slice(0, 100) + '...',
+        speechRecognition: recognitionSupport,
+        speechSynthesis: synthesisSupport,
+        windowInnerWidth: window.innerWidth,
+        windowInnerHeight: window.innerHeight
+      })
+      
+      addDebugLog(`📱 Mobile: ${mobile}, Browser: ${vendor}`)
+      addDebugLog(`🎤 Speech Recognition: ${recognitionSupport}`)
+      addDebugLog(`🔊 Speech Synthesis: ${synthesisSupport}`)
+      
+      // Mobile-specific warnings
+      if (mobile && !recognitionSupport) {
+        addDebugLog(`⚠️ Speech recognition not supported on ${vendor}`)
+        console.warn(`Speech recognition not available on ${vendor}. Consider fallback options.`)
+      }
+      
+      if (mobile && vendor === 'iOS Safari') {
+        addDebugLog(`🍎 iOS Safari detected - using iOS-optimized settings`)
+        console.log('iOS Safari: Enabling iOS-specific optimizations')
+      }
+      
+      if (vendor === 'Arc' || vendor === 'Arc (detected)') {
+        addDebugLog(`🌈 Arc browser detected - using Chromium-based optimizations`)
+        console.log('Arc Browser: Using Chromium-based speech recognition optimizations')
+      }
+    }
+
+    detectMobileAndCapabilities()
+  }, [addDebugLog])
 
   // Forward declarations for mutual dependencies
   let startRealTimeSpeechRecognition: () => boolean
@@ -404,49 +564,68 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
   }, [addDebugLog])
 
   const speakText = useCallback(
-    (text: string) => {
+    async (text: string) => {
       if ("speechSynthesis" in window) {
         window.speechSynthesis.cancel()
 
-        const utterance = new SpeechSynthesisUtterance(text)
+        const ttsTimestamp = new Date().toISOString()
+        console.log(`🔊 [${ttsTimestamp}] TTS BEGINS - Agent started speaking: "${text}"`)
         
-        // Use best available Portuguese voice
+        setIsAgentSpeaking(true)
+        // Stop real-time recognition while agent speaks
+        stopRealTimeSpeechRecognition()
+        setIsAutoListening(false)
+        isAutoListeningRef.current = false
+        addDebugLog("🗣️ Agent started speaking - speech recognition paused")
+
+        // Configure utterance settings
+        let voice = bestVoice
+        let lang = "pt-BR"
+        
         if (bestVoice) {
-          utterance.voice = bestVoice
-          utterance.lang = bestVoice.lang
+          voice = bestVoice
+          lang = bestVoice.lang
         } else {
           // Fallback to getBestPortugueseVoice if bestVoice not set
-          const voice = getBestPortugueseVoice(addDebugLog)
-          if (voice) {
-            utterance.voice = voice
-            utterance.lang = voice.lang
-            setBestVoice(voice) // Cache for next time
-          } else {
-            utterance.lang = "pt-BR"
+          const foundVoice = getBestPortugueseVoice(addDebugLog)
+          if (foundVoice) {
+            voice = foundVoice
+            lang = foundVoice.lang
+            setBestVoice(foundVoice) // Cache for next time
           }
         }
-        
-        utterance.rate = 0.9 // Slightly faster speech for better flow
-        utterance.pitch = 1
 
-        utterance.onstart = () => {
-          const ttsTimestamp = new Date().toISOString()
-          
-          // CONSOLE LOG: TTS begins
-          console.log(`🔊 [${ttsTimestamp}] TTS BEGINS - Agent started speaking: "${text}"`)
-          
-          setIsAgentSpeaking(true)
-          // Stop real-time recognition while agent speaks
-          stopRealTimeSpeechRecognition()
-          setIsAutoListening(false)
-          isAutoListeningRef.current = false
-          addDebugLog("🗣️ Agent started speaking - speech recognition paused")
+        const utteranceConfig = {
+          voice: voice,
+          lang: lang,
+          rate: 0.9, // Optimal rate for Portuguese pronunciation
+          pitch: 1
         }
 
-        utterance.onend = () => {
+        try {
+          // Check if text contains SSML pause markers
+          if (text.includes('<pause:')) {
+            addDebugLog(`🎭 Using SSML pause processing for: "${text}"`)
+            await processSpeechWithPauses(text, utteranceConfig)
+          } else {
+            // Standard speech synthesis for text without pauses
+            addDebugLog(`🗣️ Using standard synthesis for: "${text}"`)
+            const utterance = new SpeechSynthesisUtterance(text)
+            
+            if (utteranceConfig.voice) utterance.voice = utteranceConfig.voice
+            utterance.lang = utteranceConfig.lang
+            utterance.rate = utteranceConfig.rate
+            utterance.pitch = utteranceConfig.pitch
+            
+            await new Promise<void>((resolve) => {
+              utterance.onend = () => resolve()
+              utterance.onerror = () => resolve() // Still resolve on error
+              window.speechSynthesis.speak(utterance)
+            })
+          }
+
+          // TTS completed
           const ttsEndTimestamp = new Date().toISOString()
-          
-          // CONSOLE LOG: TTS ends
           console.log(`🔇 [${ttsEndTimestamp}] TTS ENDS - Agent finished speaking, preparing to listen`)
           
           setIsAgentSpeaking(false)
@@ -484,87 +663,153 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
               addDebugLog(`❌ startRealTimeSpeechRecognition function not available`)
             }
           }, 300)
+          
+        } catch (error) {
+          addDebugLog(`❌ Error in speech synthesis: ${error}`)
+          setIsAgentSpeaking(false)
         }
 
-        synthesisRef.current = utterance
-        window.speechSynthesis.speak(utterance)
-        setSubtitles(text)
+        setSubtitles(text.replace(/<pause:\d+ms>/g, '')) // Clean text for subtitles
       }
     },
-    [addDebugLog, bestVoice, getBestPortugueseVoice, stopRealTimeSpeechRecognition, isConnected],
+    [addDebugLog, bestVoice, getBestPortugueseVoice, stopRealTimeSpeechRecognition, isConnected, processSpeechWithPauses],
   )
 
   const getContextualResponse = (userMessage: string): string[] => {
-    // Greeting responses
+    // Greeting responses with natural pauses
     if (userMessage.includes('olá') || userMessage.includes('oi') || userMessage.includes('bom dia') || userMessage.includes('boa tarde')) {
       return [
-        'Olá! Como você está hoje?',
-        'Oi! Que bom te ver aqui. Como foi seu dia?',
-        'Olá! Está tudo bem com você?'
+        'Olá! <pause:500ms> Como você está hoje?',
+        'Oi! <pause:300ms> Que bom te ver aqui. <pause:400ms> Como foi seu dia?',
+        'Olá! <pause:400ms> Está tudo bem com você?'
       ]
     }
     
-    // Feeling responses
+    // Feeling responses with thoughtful pauses
     if (userMessage.includes('bem') || userMessage.includes('bom') || userMessage.includes('ótimo')) {
       return [
-        'Que bom! O que você gosta de fazer no seu tempo livre?',
-        'Fico feliz em saber! Conte-me sobre seus hobbies.',
-        'Excelente! Qual é sua comida brasileira favorita?'
+        'Que bom! <pause:400ms> O que você gosta de fazer no seu tempo livre?',
+        'Fico feliz em saber! <pause:500ms> Conte-me sobre seus hobbies.',
+        'Excelente! <pause:300ms> Qual é sua comida brasileira favorita?'
       ]
     }
     
-    // Music responses
+    // Music responses with enthusiasm pauses
     if (userMessage.includes('música') || userMessage.includes('cantar') || userMessage.includes('samba')) {
       return [
-        'Que legal! Qual estilo de música brasileira você mais gosta?',
-        'Música é maravilhosa! Você conhece algum cantor brasileiro?',
-        'Adoro música também! Você sabe dançar samba?'
+        'Que legal! <pause:400ms> Qual estilo de música brasileira você mais gosta?',
+        'Música é maravilhosa! <pause:300ms> Você conhece algum cantor brasileiro?',
+        'Adoro música também! <pause:500ms> Você sabe dançar samba?'
       ]
     }
     
-    // Food responses
+    // Food responses with savoring pauses
     if (userMessage.includes('comida') || userMessage.includes('comer') || userMessage.includes('feijoada')) {
       return [
-        'Hmm, delicioso! Qual prato brasileiro você mais gosta?',
-        'Que bom! Você já experimentou feijoada?',
-        'Comida brasileira é incrível! Você cozinha?'
+        'Hmm, <pause:200ms> delicioso! <pause:400ms> Qual prato brasileiro você mais gosta?',
+        'Que bom! <pause:300ms> Você já experimentou feijoada?',
+        'Comida brasileira é incrível! <pause:400ms> Você cozinha?'
       ]
     }
     
-    // Study responses
+    // Study responses with encouraging pauses
     if (userMessage.includes('estudar') || userMessage.includes('português') || userMessage.includes('aprender')) {
       return [
-        'Muito bem! Há quanto tempo você estuda português?',
-        'Que dedicação! O que mais gosta na língua portuguesa?',
-        'Parabéns! Por que decidiu aprender português?'
+        'Muito bem! <pause:500ms> Há quanto tempo você estuda português?',
+        'Que dedicação! <pause:400ms> O que mais gosta na língua portuguesa?',
+        'Parabéns! <pause:300ms> Por que decidiu aprender português?'
       ]
     }
     
-    // Work responses
+    // Work responses with professional pauses
     if (userMessage.includes('trabalho') || userMessage.includes('trabalhar') || userMessage.includes('emprego')) {
       return [
-        'Interessante! Em que área você trabalha?',
-        'Que legal! Você gosta do seu trabalho?',
-        'Trabalho é importante! Onde você trabalha?'
+        'Interessante! <pause:400ms> Em que área você trabalha?',
+        'Que legal! <pause:300ms> Você gosta do seu trabalho?',
+        'Trabalho é importante! <pause:400ms> Onde você trabalha?'
       ]
     }
     
-    // Travel responses
+    // Travel responses with excitement pauses
     if (userMessage.includes('viajar') || userMessage.includes('brasil') || userMessage.includes('cidade')) {
       return [
-        'Que aventura! Qual cidade brasileira você quer visitar?',
-        'Viagem é ótima! Você já esteve no Brasil?',
-        'Adoraria saber mais! Que lugar você mais quer conhecer?'
+        'Que aventura! <pause:500ms> Qual cidade brasileira você quer visitar?',
+        'Viagem é ótima! <pause:400ms> Você já esteve no Brasil?',
+        'Adoraria saber mais! <pause:300ms> Que lugar você mais quer conhecer?'
       ]
     }
     
-    // Default encouraging responses
+    // Enhanced question detection - conversational follow-up questions
+    // Check for "e você" pattern (most common conversational turn-around)
+    if (userMessage.includes('e você') || userMessage.includes('e tu')) {
+      // Context-sensitive responses based on the content before "e você"
+      if (userMessage.includes('música') || userMessage.includes('cantar')) {
+        return [
+          'Eu adoro MPB! <pause:300ms> Caetano Veloso é meu favorito. <pause:400ms> Você conhece as músicas dele?',
+          'Gosto muito de bossa nova! <pause:300ms> É suave e elegante. <pause:400ms> Qual seu ritmo brasileiro favorito?'
+        ]
+      } else if (userMessage.includes('comida') || userMessage.includes('comer')) {
+        return [
+          'Adoro feijoada! <pause:300ms> É o prato mais brasileiro que existe. <pause:400ms> Você já experimentou?',
+          'Gosto muito de açaí! <pause:300ms> É refrescante e saudável. <pause:400ms> Que sobremesa você prefere?'
+        ]
+      } else if (userMessage.includes('trabalh') || userMessage.includes('estud')) {
+        return [
+          'Eu trabalho ensinando português! <pause:300ms> É muito gratificante. <pause:400ms> O que você mais gosta no seu trabalho?',
+          'Adoro estudar idiomas! <pause:300ms> Cada língua é um mundo novo. <pause:400ms> Que outras línguas você fala?'
+        ]
+      } else {
+        return [
+          'Eu estou sempre bem! <pause:300ms> Amo conversar em português. <pause:400ms> Como está se sentindo com o aprendizado?',
+          'Obrigada por perguntar! <pause:300ms> Estou animada para nossa conversa. <pause:400ms> E você, como está hoje?'
+        ]
+      }
+    }
+    
+    // Direct preference questions about the tutor
+    if (userMessage.includes('qual você gosta') || userMessage.includes('que você prefere') || 
+        userMessage.includes('qual sua') || userMessage.includes('você gosta de que')) {
+      return [
+        'Gosto de tudo relacionado ao Brasil! <pause:400ms> A cultura é muito rica. <pause:300ms> Qual aspecto do Brasil mais te interessa?',
+        'Adoro música brasileira! <pause:300ms> Especialmente MPB e samba. <pause:400ms> Que tipo de música você curte?',
+        'Prefiro falar sobre cultura e tradições! <pause:300ms> Brasil tem tanta diversidade. <pause:400ms> O que você quer conhecer?'
+      ]
+    }
+    
+    // Opinion and thought questions
+    if (userMessage.includes('você acha') || userMessage.includes('sua opinião') || 
+        userMessage.includes('você pensa') || userMessage.includes('o que pensa')) {
+      return [
+        'Acho que praticar é fundamental! <pause:400ms> Quanto mais conversamos, melhor fica. <pause:300ms> Você sente isso também?',
+        'Penso que cada pessoa aprende diferente. <pause:300ms> Alguns preferem música, outros conversa. <pause:400ms> Como você aprende melhor?',
+        'Na minha opinião, <pause:200ms> português brasileiro é lindo! <pause:300ms> As expressões são únicas. <pause:400ms> Você concorda?'
+      ]
+    }
+    
+    // "Como é" or "como está" questions directed at tutor
+    if ((userMessage.includes('como é') || userMessage.includes('como está') || userMessage.includes('como vai')) &&
+        (userMessage.includes('você') || userMessage.includes('tu'))) {
+      return [
+        'Estou muito bem! <pause:300ms> Sempre animada para ensinar. <pause:400ms> Como você está se sentindo com o português?',
+        'Vai tudo ótimo! <pause:300ms> Adoro essas conversas. <pause:400ms> E você, como está o seu dia?'
+      ]
+    }
+    
+    // "Você conhece" or "você sabe" questions
+    if (userMessage.includes('você conhece') || userMessage.includes('você sabe') || userMessage.includes('tu sabes')) {
+      return [
+        'Conheço muita coisa sobre o Brasil! <pause:300ms> Música, comida, cultura. <pause:400ms> O que você quer saber?',
+        'Sei bastante sobre português brasileiro! <pause:300ms> É minha paixão. <pause:400ms> Que dúvida você tem?'
+      ]
+    }
+    
+    // Default encouraging responses with conversational pauses
     return [
-      'Muito interessante! Pode me contar mais sobre isso?',
-      'Que legal! Como você se sente sobre isso?',
-      'Entendi! O que mais você gostaria de compartilhar?',
-      'Que bom saber isso! E o que você acha?',
-      'Interessante! Você pode explicar melhor?'
+      'Muito interessante! <pause:400ms> Pode me contar mais sobre isso?',
+      'Que legal! <pause:300ms> Como você se sente sobre isso?',
+      'Entendi! <pause:400ms> O que mais você gostaria de compartilhar?',
+      'Que bom saber isso! <pause:300ms> E o que você acha?',
+      'Interessante! <pause:500ms> Você pode explicar melhor?'
     ]
   }
 
@@ -653,10 +898,48 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
       recognitionRef.current = new SpeechRecognition()
       
-      // Configure for continuous real-time recognition
+      // Configure for continuous real-time recognition with mobile optimizations
       recognitionRef.current.lang = 'pt-BR'
-      recognitionRef.current.continuous = true
-      recognitionRef.current.interimResults = true
+      
+      // Browser-specific optimizations
+      if (isMobile) {
+        // iOS Safari requires different settings
+        if (speechCapabilities.vendor === 'iOS Safari') {
+          recognitionRef.current.continuous = false // iOS Safari works better with non-continuous
+          recognitionRef.current.interimResults = false // iOS Safari has issues with interim results
+          addDebugLog(`🍎 Using iOS Safari optimizations: continuous=false, interimResults=false`)
+        } else {
+          // Android Chrome and other mobile browsers
+          recognitionRef.current.continuous = true
+          recognitionRef.current.interimResults = true
+          addDebugLog(`📱 Using mobile optimizations: continuous=true, interimResults=true`)
+        }
+      } else {
+        // Desktop browser optimizations
+        if (speechCapabilities.vendor === 'Arc' || speechCapabilities.vendor === 'Arc (detected)') {
+          // Arc browser (Chromium-based) optimizations
+          recognitionRef.current.continuous = true
+          recognitionRef.current.interimResults = true
+          // Arc may benefit from more aggressive continuous listening
+          addDebugLog(`🌈 Using Arc browser optimizations: continuous=true, interimResults=true, enhanced listening`)
+        } else if (speechCapabilities.vendor === 'Chrome') {
+          // Standard Chrome optimizations
+          recognitionRef.current.continuous = true
+          recognitionRef.current.interimResults = true
+          addDebugLog(`🟢 Using Chrome optimizations: continuous=true, interimResults=true`)
+        } else if (speechCapabilities.vendor === 'Safari') {
+          // Desktop Safari has different behavior than iOS Safari
+          recognitionRef.current.continuous = true
+          recognitionRef.current.interimResults = true
+          addDebugLog(`🍎 Using Safari desktop optimizations: continuous=true, interimResults=true`)
+        } else {
+          // Default desktop settings for other browsers (Edge, Firefox, etc.)
+          recognitionRef.current.continuous = true
+          recognitionRef.current.interimResults = true
+          addDebugLog(`💻 Using desktop settings: continuous=true, interimResults=true`)
+        }
+      }
+      
       recognitionRef.current.maxAlternatives = 1
 
       recognitionRef.current.onstart = () => {
@@ -716,21 +999,62 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
       }
 
       recognitionRef.current.onerror = (event: any) => {
+        const timestamp = new Date().toISOString()
+        console.log(`❌ [${timestamp}] SPEECH RECOGNITION ERROR: ${event.error} (${speechCapabilities.vendor})`)
         addDebugLog(`❌ Speech recognition error: ${event.error}`)
         
-        // Handle specific errors
+        // Browser-specific error handling
+        if (isMobile) {
+          if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+            addDebugLog(`🚫 Microphone permission denied on ${speechCapabilities.vendor}`)
+            console.error('Mobile microphone permission required. Please allow microphone access.')
+          } else if (event.error === 'network') {
+            addDebugLog(`🌐 Network error on ${speechCapabilities.vendor} - speech recognition requires internet`)
+          } else if (event.error === 'no-speech' && speechCapabilities.vendor === 'iOS Safari') {
+            addDebugLog(`🔇 iOS Safari no-speech timeout - this is normal behavior`)
+            // iOS Safari often times out, restart automatically
+            setTimeout(() => {
+              if (isConnected && !isAgentSpeaking && isAutoListeningRef.current) {
+                startRealTimeSpeechRecognition()
+              }
+            }, 500)
+          }
+        } else {
+          // Desktop browser error handling
+          if (speechCapabilities.vendor === 'Arc' || speechCapabilities.vendor === 'Arc (detected)') {
+            // Arc-specific error handling
+            if (event.error === 'not-allowed') {
+              addDebugLog(`🚫 Arc: Microphone permission denied - check Arc's privacy settings`)
+              console.error('Arc Browser: Please allow microphone access in Arc settings or site permissions.')
+            } else if (event.error === 'network') {
+              addDebugLog(`🌐 Arc: Network error - Arc requires internet for speech recognition`)
+            } else if (event.error === 'no-speech') {
+              addDebugLog(`🔇 Arc: No speech detected - restarting recognition`)
+              // Arc handles no-speech well, just restart
+            } else if (event.error === 'aborted') {
+              addDebugLog(`⏹️ Arc: Recognition aborted - normal for Arc when switching focus`)
+            }
+          } else if (event.error === 'not-allowed' && speechCapabilities.vendor === 'Chrome') {
+            addDebugLog(`🚫 Chrome: Microphone permission denied - check Chrome settings`)
+          }
+        }
+        
+        // General error handling
         if (event.error === 'no-speech') {
           addDebugLog("🔇 No speech detected, continuing to listen...")
         } else if (event.error === 'aborted') {
           addDebugLog("⏹️ Speech recognition aborted")
+        } else if (event.error === 'audio-capture') {
+          addDebugLog("🎤 Audio capture failed - check microphone")
         } else {
-          // Restart recognition on other errors
+          // Restart recognition on other errors with mobile-specific delays
+          const restartDelay = isMobile ? 2000 : 1000 // Longer delay for mobile
           setTimeout(() => {
             if (isConnected && !isAgentSpeaking) {
-              addDebugLog("🔄 Restarting speech recognition after error")
+              addDebugLog(`🔄 Restarting speech recognition after ${event.error} (delay: ${restartDelay}ms)`)
               startRealTimeSpeechRecognition()
             }
-          }, 1000)
+          }, restartDelay)
         }
       }
 
@@ -741,10 +1065,17 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
         
         // Auto-restart if still connected and agent not speaking
         if (isConnected && !isAgentSpeaking && isAutoListeningRef.current) {
+          // Arc browser may need slightly different restart timing
+          const restartDelay = (speechCapabilities.vendor === 'Arc' || speechCapabilities.vendor === 'Arc (detected)') ? 200 : 100
+          
           setTimeout(() => {
-            addDebugLog("🔄 Auto-restarting speech recognition")
+            if (speechCapabilities.vendor === 'Arc' || speechCapabilities.vendor === 'Arc (detected)') {
+              addDebugLog("🔄 Auto-restarting speech recognition (Arc optimized)")
+            } else {
+              addDebugLog("🔄 Auto-restarting speech recognition")
+            }
             startRealTimeSpeechRecognition()
-          }, 100)
+          }, restartDelay)
         } else {
           setIsListening(false)
         }
@@ -779,8 +1110,8 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
       setIsAutoListening(true)
       isAutoListeningRef.current = true
       
-      // Start with a greeting immediately  
-      const greeting = "Olá! Bem-vindo ao seu tutor de português brasileiro. Vamos praticar juntos! Como você está hoje?"
+      // Start with a greeting immediately with natural pauses
+      const greeting = "Olá! <pause:400ms> Bem-vindo ao seu tutor de português brasileiro. <pause:600ms> Vamos praticar juntos! <pause:500ms> Como você está hoje?"
       speakText(greeting)
       
       addDebugLog("✅ Conversation started - real-time recognition will activate after greeting")

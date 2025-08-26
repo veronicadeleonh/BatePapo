@@ -7,10 +7,19 @@ import { Input } from "@/components/ui/input"
 import { useVoice } from "@/components/voice-provider"
 import { Mic, MicOff, Volume2, Settings, MessageCircle, Heart, Star, Zap } from "lucide-react"
 
+interface ConversationEntry {
+  id: number
+  type: 'user' | 'agent'
+  text: string
+  timestamp: Date
+}
+
 export default function PortugueseTutor() {
   const [textInput, setTextInput] = useState("")
   const [showDebug, setShowDebug] = useState(false)
   const [conversationCount, setConversationCount] = useState(0)
+  const [conversationHistory, setConversationHistory] = useState<ConversationEntry[]>([])
+  const [showHistory, setShowHistory] = useState(false)
 
   const {
     isConnected,
@@ -32,6 +41,52 @@ export default function PortugueseTutor() {
       setConversationCount(prev => prev + 1)
     }
   }, [currentTranscript])
+
+  // Track user transcripts in conversation history
+  useEffect(() => {
+    if (currentTranscript && currentTranscript.trim() && !currentTranscript.endsWith('...')) {
+      const existingUserEntry = conversationHistory.find(
+        entry => entry.type === 'user' && entry.text === currentTranscript.trim()
+      )
+      
+      if (!existingUserEntry) {
+        const newEntry: ConversationEntry = {
+          id: Date.now(),
+          type: 'user',
+          text: currentTranscript.trim(),
+          timestamp: new Date()
+        }
+        setConversationHistory(prev => [...prev, newEntry])
+      }
+    }
+  }, [currentTranscript, conversationHistory])
+
+  // Track agent responses in conversation history
+  useEffect(() => {
+    if (subtitles && subtitles.trim() && isAgentSpeaking) {
+      const existingAgentEntry = conversationHistory.find(
+        entry => entry.type === 'agent' && entry.text === subtitles.trim()
+      )
+      
+      if (!existingAgentEntry) {
+        const newEntry: ConversationEntry = {
+          id: Date.now() + 1, // Slight offset to avoid ID conflicts
+          type: 'agent',
+          text: subtitles.trim(),
+          timestamp: new Date()
+        }
+        setConversationHistory(prev => [...prev, newEntry])
+      }
+    }
+  }, [subtitles, isAgentSpeaking, conversationHistory])
+
+  // Clear conversation history when conversation ends
+  useEffect(() => {
+    if (!isConnected) {
+      // Keep history for review even after conversation ends
+      // Only clear when manually clicked or new conversation starts
+    }
+  }, [isConnected])
 
   const handleTextSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -86,6 +141,19 @@ export default function PortugueseTutor() {
         <Settings size={16} />
       </button>
 
+      {/* Conversation History - Toggle */}
+      <button
+        onClick={() => setShowHistory(!showHistory)}
+        className="fixed top-4 right-20 z-50 bg-black/20 backdrop-blur-sm border border-white/20 text-white px-3 py-2 rounded-lg text-xs hover:bg-black/30 transition-all"
+      >
+        <MessageCircle size={16} />
+        {conversationHistory.length > 0 && (
+          <span className="absolute -top-1 -right-1 bg-blue-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+            {conversationHistory.length}
+          </span>
+        )}
+      </button>
+
       {showDebug && (
         <div className="fixed top-16 right-4 bg-black/90 backdrop-blur-sm text-white p-4 rounded-lg text-xs max-w-sm z-40 border border-white/20">
           <div className="font-bold mb-2 text-green-400">Debug Status:</div>
@@ -95,6 +163,11 @@ export default function PortugueseTutor() {
             <div>Speaking: <span className={isAgentSpeaking ? "text-green-400" : "text-gray-400"}>{isAgentSpeaking.toString()}</span></div>
             <div>Recording: <span className={isRecording ? "text-red-400" : "text-gray-400"}>{isRecording.toString()}</span></div>
             <div>Voice: <span className="text-blue-400">{Math.round(voiceActivity)}</span></div>
+            {/* Mobile indicator */}
+            <div className="border-t border-white/10 pt-1 mt-2">
+              <div>Device: <span className="text-yellow-400">{/Mobi|Android/i.test(navigator.userAgent) ? '📱 Mobile' : '💻 Desktop'}</span></div>
+              <div>Screen: <span className="text-blue-300">{window.innerWidth}x{window.innerHeight}</span></div>
+            </div>
           </div>
           <div className="mt-3 space-y-1 border-t border-white/20 pt-2 max-h-32 overflow-y-auto">
             {debugInfo.slice(-5).map((log, i) => (
@@ -103,6 +176,62 @@ export default function PortugueseTutor() {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Conversation History Panel */}
+      {showHistory && (
+        <div className="fixed top-16 right-20 bg-black/90 backdrop-blur-sm text-white p-4 rounded-lg text-sm max-w-md z-40 border border-white/20 max-h-96 overflow-hidden flex flex-col">
+          <div className="flex items-center justify-between mb-3">
+            <div className="font-bold text-blue-400">Conversa ({conversationHistory.length} trocas)</div>
+            <button
+              onClick={() => setConversationHistory([])}
+              className="text-xs bg-red-500/20 hover:bg-red-500/30 px-2 py-1 rounded border border-red-500/30 transition-all"
+            >
+              Limpar
+            </button>
+          </div>
+          <div className="overflow-y-auto flex-1 space-y-3 pr-2">
+            {conversationHistory.length === 0 ? (
+              <div className="text-gray-400 text-center py-4">
+                Nenhuma conversa ainda.<br />
+                Comece a falar para ver o histórico!
+              </div>
+            ) : (
+              conversationHistory.map((entry) => (
+                <div
+                  key={entry.id}
+                  className={`p-3 rounded-lg border ${
+                    entry.type === 'user' 
+                      ? 'bg-blue-500/10 border-blue-400/20 ml-4' 
+                      : 'bg-green-500/10 border-green-400/20 mr-4'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className={`text-xs font-medium ${
+                      entry.type === 'user' ? 'text-blue-300' : 'text-green-300'
+                    }`}>
+                      {entry.type === 'user' ? '👤 Você' : '🤖 Tutor'}
+                    </span>
+                    <span className="text-xs text-gray-400">
+                      {entry.timestamp.toLocaleTimeString('pt-BR', { 
+                        hour: '2-digit', 
+                        minute: '2-digit' 
+                      })}
+                    </span>
+                  </div>
+                  <div className="text-white leading-relaxed">
+                    "{entry.text}"
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+          {conversationHistory.length > 0 && (
+            <div className="mt-3 pt-3 border-t border-white/10 text-xs text-gray-400 text-center">
+              Scroll para ver mais mensagens
+            </div>
+          )}
         </div>
       )}
 
@@ -129,15 +258,20 @@ export default function PortugueseTutor() {
               </span>
             </div>
 
-            {/* Main Control Button */}
+            {/* Main Control Button with mobile optimization */}
             <Button
               onClick={isConnected ? stopConversation : startConversation}
               size="lg"
-              className={`px-12 py-6 text-xl rounded-full shadow-2xl transition-all duration-300 transform hover:scale-105 border border-white/20 ${
+              className={`px-12 py-6 text-xl rounded-full shadow-2xl transition-all duration-300 transform active:scale-95 touch-manipulation border border-white/20 ${
                 isConnected 
-                  ? "bg-gradient-to-r from-red-500 to-pink-600 hover:from-red-600 hover:to-pink-700" 
-                  : "bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700"
-              } text-white`}
+                  ? "bg-gradient-to-r from-red-500 to-pink-600 active:from-red-600 active:to-pink-700" 
+                  : "bg-gradient-to-r from-blue-500 to-purple-600 active:from-blue-600 active:to-purple-700"
+              } text-white ${
+                // Mobile hover states
+                typeof window !== 'undefined' && /Mobi|Android/i.test(navigator.userAgent) 
+                ? "" // No hover effects on mobile
+                : "hover:scale-105 hover:from-blue-600 hover:to-purple-700"
+              }`}
             >
               {isConnected ? (
                 <>
@@ -147,7 +281,10 @@ export default function PortugueseTutor() {
               ) : (
                 <>
                   <Mic className="mr-3 h-6 w-6" />
-                  Começar
+                  {typeof window !== 'undefined' && /iPhone|iPad|iPod/i.test(navigator.userAgent) 
+                    ? "Tocar para Falar" // iOS-specific text
+                    : "Começar"
+                  }
                 </>
               )}
             </Button>
