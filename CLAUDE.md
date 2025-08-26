@@ -53,10 +53,18 @@ This is a Next.js 15 application built as a Brazilian Portuguese conversation tu
 - Audio context management for microphone access
 
 **AI Behavior:**
+- **Claude API Integration**: Uses claude-3-5-haiku-20241022 for natural Portuguese conversations
+- **Smart Fallback**: Automatically falls back to local contextual responses if API fails
 - Configured to maintain simple, everyday conversation topics
 - Focuses on language learning with gentle corrections
 - Always asks follow-up questions to keep conversation flowing
 - Responds exclusively in Brazilian Portuguese
+- Understands context and responds to follow-up questions naturally
+
+**Environment Setup:**
+- Add `NEXT_PUBLIC_ANTHROPIC_API_KEY` to `.env.local` for Claude API access
+- Without API key, app uses local contextual response system
+- API key should be obtained from https://console.anthropic.com/
 
 ### Configuration Details
 

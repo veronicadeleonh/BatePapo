@@ -11,6 +11,25 @@ declare global {
   }
 }
 
+// User profile interface for memory system
+interface UserProfile {
+  name?: string
+  preferences: {
+    favoriteTopics: string[]
+    learningGoals: string[]
+    conversationStyle: 'formal' | 'casual' | 'friendly'
+    preferredPace: 'slow' | 'normal' | 'fast'
+  }
+  conversationHistory: {
+    date: string
+    topics: string[]
+    keyPoints: string[]
+    mood: string
+  }[]
+  createdAt: string
+  lastActive: string
+}
+
 interface VoiceContextType {
   isListening: boolean
   isConnected: boolean
@@ -25,6 +44,8 @@ interface VoiceContextType {
   stopVoiceInput: () => void
   debugInfo: string[]
   voiceActivity: number
+  userProfile: UserProfile
+  updateUserProfile: (updates: Partial<UserProfile>) => void
 }
 
 const VoiceContext = createContext<VoiceContextType | null>(null)
@@ -42,6 +63,19 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
   const [debugInfo, setDebugInfo] = useState<string[]>([])
   const [voiceActivity, setVoiceActivity] = useState(0)
   const [bestVoice, setBestVoice] = useState<SpeechSynthesisVoice | null>(null)
+  
+  // User profile state for memory system
+  const [userProfile, setUserProfile] = useState<UserProfile>({
+    preferences: {
+      favoriteTopics: [],
+      learningGoals: [],
+      conversationStyle: 'friendly',
+      preferredPace: 'normal'
+    },
+    conversationHistory: [],
+    createdAt: new Date().toISOString(),
+    lastActive: new Date().toISOString()
+  })
   
   // Real-time speech recognition refs
   const recognitionRef = useRef<any>(null)
@@ -63,6 +97,57 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
     console.log(`[v0] ${message}`)
     setDebugInfo((prev) => [...prev.slice(-4), `${new Date().toLocaleTimeString()}: ${message}`])
   }, [])
+
+  // localStorage functions for user profile memory
+  const saveUserProfile = useCallback((profile: UserProfile) => {
+    try {
+      localStorage.setItem('portuguese-tutor-profile', JSON.stringify(profile))
+      addDebugLog(`💾 Profile saved to localStorage`)
+    } catch (error) {
+      addDebugLog(`❌ Failed to save profile: ${error}`)
+    }
+  }, [addDebugLog])
+
+  const loadUserProfile = useCallback((): UserProfile => {
+    try {
+      const saved = localStorage.getItem('portuguese-tutor-profile')
+      if (saved) {
+        const profile = JSON.parse(saved) as UserProfile
+        addDebugLog(`📂 Profile loaded from localStorage`)
+        return {
+          ...profile,
+          lastActive: new Date().toISOString()
+        }
+      }
+    } catch (error) {
+      addDebugLog(`❌ Failed to load profile: ${error}`)
+    }
+    
+    // Return default profile if no saved profile or error
+    return {
+      preferences: {
+        favoriteTopics: [],
+        learningGoals: [],
+        conversationStyle: 'friendly',
+        preferredPace: 'normal'
+      },
+      conversationHistory: [],
+      createdAt: new Date().toISOString(),
+      lastActive: new Date().toISOString()
+    }
+  }, [addDebugLog])
+
+  const updateUserProfile = useCallback((updates: Partial<UserProfile>) => {
+    setUserProfile(prev => {
+      const updated = {
+        ...prev,
+        ...updates,
+        lastActive: new Date().toISOString()
+      }
+      saveUserProfile(updated)
+      return updated
+    })
+  }, [saveUserProfile])
 
   // Process SSML-style pause markers for natural speech
   const processSpeechWithPauses = useCallback(async (text: string, utteranceConfig: any) => {
@@ -168,6 +253,13 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
     logFunction?.("No Portuguese voice found, using default")
     return null
   }, [])
+
+  // Load user profile from localStorage on mount
+  useEffect(() => {
+    const profile = loadUserProfile()
+    setUserProfile(profile)
+    addDebugLog(`🧠 Memory system initialized${profile.name ? ` for ${profile.name}` : ''}`)
+  }, [loadUserProfile, addDebugLog])
 
   // Voice loading useEffect to initialize best voice
   useEffect(() => {
@@ -598,7 +690,7 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
         const utteranceConfig = {
           voice: voice,
           lang: lang,
-          rate: 0.9, // Optimal rate for Portuguese pronunciation
+          rate: 1.1, // Faster rate for more natural conversation pace
           pitch: 1
         }
 
@@ -817,22 +909,81 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
     const aiStartTime = performance.now()
     
     try {
-      // Simple local AI response system - free and offline
-      const responses = getContextualResponse(userMessage.toLowerCase())
+      // Try Claude API first if API key is available
+      if (process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY) {
+        const { Anthropic } = await import('@anthropic-ai/sdk')
+        const anthropic = new Anthropic({
+          apiKey: process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY,
+          dangerouslyAllowBrowser: true
+        })
+
+        // Build memory context
+        let memoryContext = ''
+        
+        if (userProfile.name) {
+          memoryContext += `O nome do seu amigo(a) é ${userProfile.name}.\n`
+        }
+        
+        if (userProfile.preferences.favoriteTopics.length > 0) {
+          memoryContext += `Tópicos favoritos: ${userProfile.preferences.favoriteTopics.join(', ')}.\n`
+        }
+        
+        if (userProfile.preferences.learningGoals.length > 0) {
+          memoryContext += `Objetivos de aprendizado: ${userProfile.preferences.learningGoals.join(', ')}.\n`
+        }
+        
+        if (userProfile.conversationHistory.length > 0) {
+          const recentConversations = userProfile.conversationHistory.slice(-3)
+          const recentTopics = recentConversations.flatMap(conv => conv.topics).slice(-5)
+          if (recentTopics.length > 0) {
+            memoryContext += `Tópicos recentes das conversas: ${[...new Set(recentTopics)].join(', ')}.\n`
+          }
+        }
+        
+        const systemPrompt = `Você é uma amiga brasileira muito simpática e carismática que adora conversar. Responda sempre em português brasileiro de forma natural e descontraída, como uma amiga falaria. Use frases curtas e simples (máximo 2 frases). SEMPRE faça 1 pergunta relacionada para manter a conversa fluindo. Use pausas naturais escrevendo <pause:300ms> onde apropriado. Seja calorosa, use expressões brasileiras naturais como "que legal!", "nossa!", "que bom!", e sempre demonstre interesse genuíno no que a pessoa fala.
+
+${memoryContext ? `CONTEXTO DA AMIZADE:\n${memoryContext}` : ''}
+
+Amigo(a) disse: "${userMessage}"`
+
+        const response = await anthropic.messages.create({
+          model: 'claude-3-5-haiku-20241022',
+          max_tokens: 100,
+          messages: [{
+            role: 'user',
+            content: systemPrompt
+          }]
+        })
+
+        const claudeResponse = response.content[0]?.type === 'text' ? response.content[0].text : ''
+        const aiEndTime = performance.now()
+        addDebugLog(`🤖 Claude API response in ${(aiEndTime - aiStartTime).toFixed(1)}ms`)
+        
+        return claudeResponse
+      }
       
-      // Generate response instantly - no artificial delay
+      // Fallback to local contextual responses
+      const responses = getContextualResponse(userMessage.toLowerCase())
       const randomResponse = responses[Math.floor(Math.random() * responses.length)]
       
       const aiEndTime = performance.now()
-      addDebugLog(`⚡ AI response generated in ${(aiEndTime - aiStartTime).toFixed(1)}ms`)
+      addDebugLog(`⚡ Local response generated in ${(aiEndTime - aiStartTime).toFixed(1)}ms`)
       
       return randomResponse
+      
     } catch (error) {
       const errorTime = performance.now()
-      addDebugLog(`❌ AI generation failed after ${(errorTime - aiStartTime).toFixed(1)}ms: ${error}`)
+      addDebugLog(`❌ Claude API failed after ${(errorTime - aiStartTime).toFixed(1)}ms, using fallback`)
       
-      // Ultra-fast fallback response
-      return "Desculpe, pode repetir?"
+      // Fallback to local contextual responses on API failure
+      try {
+        const responses = getContextualResponse(userMessage.toLowerCase())
+        const randomResponse = responses[Math.floor(Math.random() * responses.length)]
+        return randomResponse
+      } catch (fallbackError) {
+        // Ultimate fallback
+        return "Desculpe, pode repetir?"
+      }
     }
   }
 
@@ -860,6 +1011,37 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
         console.log(`⚡ [${responseTimestamp}] AI RESPONSE READY - "${response}" (${(responseReadyTime - responseStartTime).toFixed(1)}ms)`)
         
         addDebugLog(`⚡ Response ready in ${(responseReadyTime - responseStartTime).toFixed(1)}ms`)
+
+        // Update conversation history and extract insights
+        const extractTopics = (message: string): string[] => {
+          const topicKeywords = ['música', 'comida', 'trabalho', 'família', 'viagem', 'estudo', 'português', 'brasil', 'cultura', 'hobby', 'esporte', 'filme', 'livro']
+          return topicKeywords.filter(topic => message.toLowerCase().includes(topic))
+        }
+
+        const extractMood = (message: string): string => {
+          if (message.includes('feliz') || message.includes('bem') || message.includes('ótimo')) return 'positivo'
+          if (message.includes('triste') || message.includes('mal') || message.includes('difícil')) return 'negativo'
+          return 'neutro'
+        }
+
+        // Extract user name if mentioned
+        const nameMatch = userMessage.match(/(?:sou|me chamo|meu nome é)\s+([A-Za-zÀ-ÿ]+)/i)
+        if (nameMatch && !userProfile.name) {
+          updateUserProfile({ name: nameMatch[1] })
+          addDebugLog(`👤 User name learned: ${nameMatch[1]}`)
+        }
+
+        // Update conversation history
+        const conversationEntry = {
+          date: new Date().toISOString(),
+          topics: extractTopics(userMessage),
+          keyPoints: [userMessage.slice(0, 100)], // Store first 100 chars as key point
+          mood: extractMood(userMessage)
+        }
+
+        updateUserProfile({
+          conversationHistory: [...userProfile.conversationHistory.slice(-9), conversationEntry] // Keep last 10 conversations
+        })
 
         // Speak immediately - no artificial delay
         speakText(response)
@@ -1110,9 +1292,15 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
       setIsAutoListening(true)
       isAutoListeningRef.current = true
       
-      // Start with a greeting immediately with natural pauses
-      const greeting = "Olá! <pause:400ms> Bem-vindo ao seu tutor de português brasileiro. <pause:600ms> Vamos praticar juntos! <pause:500ms> Como você está hoje?"
-      speakText(greeting)
+      // Start with a greeting immediately with natural pauses - variety of greetings
+      const greetings = [
+        "Olá! <pause:400ms> Bem-vindo ao seu tutor de português brasileiro. <pause:600ms> Vamos praticar juntos! <pause:500ms> Como você está hoje?",
+        "Oi! <pause:300ms> Que bom te ver aqui. <pause:500ms> Sou sua amiga brasileira e vou te ajudar com o português. <pause:400ms> Como vai você?",
+        "E aí! <pause:300ms> Pronto para uma conversa em português? <pause:500ms> Vou ser como uma amiga do Brasil. <pause:400ms> Me conta, como está seu dia?",
+        "Olá, querido! <pause:400ms> Sua amiga brasileira chegou para conversar. <pause:500ms> Vamos bater um papo gostoso em português? <pause:400ms> Como você está se sentindo hoje?"
+      ]
+      const randomGreeting = greetings[Math.floor(Math.random() * greetings.length)]
+      speakText(randomGreeting)
       
       addDebugLog("✅ Conversation started - real-time recognition will activate after greeting")
     } catch (error) {
@@ -1159,6 +1347,8 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
     stopVoiceInput,
     debugInfo,
     voiceActivity,
+    userProfile,
+    updateUserProfile,
   }
 
   return <VoiceContext.Provider value={value}>{children}</VoiceContext.Provider>

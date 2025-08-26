@@ -109,9 +109,9 @@ export default function PortugueseTutor() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900 relative overflow-hidden">
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-gray-800 to-blue-900 relative overflow-hidden">
       {/* Background decoration */}
-      <div className="absolute inset-0 opacity-20 bg-[radial-gradient(circle_at_50%_50%,rgba(156,146,172,0.1)_2px,transparent_2px)] [background-size:60px_60px]"></div>
+      <div className="absolute inset-0 opacity-15 bg-[radial-gradient(circle_at_50%_50%,rgba(100,116,139,0.1)_2px,transparent_2px)] [background-size:60px_60px]"></div>
       
       {/* Full width animated waves when agent is speaking */}
       {isAgentSpeaking && (
@@ -240,8 +240,11 @@ export default function PortugueseTutor() {
           {/* Header */}
           <div className="text-center space-y-4">
             <div className="relative">
-              <h1 className="text-4xl md:text-5xl font-bold bg-gradient-to-r from-white via-blue-100 to-purple-100 bg-clip-text text-transparent">
-                Bate-Papo 🇧🇷
+              <h1 className="text-4xl md:text-5xl font-bold">
+                <span className="bg-gradient-to-r from-white via-blue-100 to-purple-100 bg-clip-text text-transparent">
+                  Bate-Papo
+                </span>
+                <span className="ml-3 text-white">🇧🇷</span>
               </h1>
             </div>
             <p className="text-lg text-white/70">
