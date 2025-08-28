@@ -28,11 +28,13 @@ export default function PortugueseTutor() {
     isRecording,
     currentTranscript,
     subtitles,
+    typewriterText,
     startConversation,
     stopConversation,
     sendTextMessage,
     debugInfo,
     voiceActivity,
+    downloadConversationData,
   } = useVoice()
 
   // Track conversation exchanges
@@ -169,12 +171,20 @@ export default function PortugueseTutor() {
               <div>Screen: <span className="text-blue-300">{window.innerWidth}x{window.innerHeight}</span></div>
             </div>
           </div>
-          <div className="mt-3 space-y-1 border-t border-white/20 pt-2 max-h-32 overflow-y-auto">
-            {debugInfo.slice(-5).map((log, i) => (
-              <div key={i} className="text-xs opacity-70 text-gray-400">
-                {log}
-              </div>
-            ))}
+          <div className="mt-3 space-y-1 border-t border-white/20 pt-2">
+            <button
+              onClick={downloadConversationData}
+              className="w-full bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 border border-blue-400/30 px-3 py-2 rounded text-xs transition-all mb-2"
+            >
+              📥 Download Conversation Data
+            </button>
+            <div className="max-h-32 overflow-y-auto">
+              {debugInfo.slice(-5).map((log, i) => (
+                <div key={i} className="text-xs opacity-70 text-gray-400">
+                  {log}
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}
@@ -317,10 +327,19 @@ export default function PortugueseTutor() {
           </div>
 
 
-          {/* Subtitles */}
+          {/* Subtitles with Typewriter Effect */}
           <div className="bg-black/30 backdrop-blur-sm border border-white/20 rounded-2xl p-6 min-h-[120px] flex items-center justify-center">
-            <p className="text-xl md:text-2xl text-center text-white leading-relaxed">
-              {isConnected ? (subtitles || "Preparando...") : "Clique em 'Começar' para iniciar a conversa"}
+            <p className="text-2xl md:text-3xl text-center text-white leading-relaxed font-medium max-w-full">
+              {isConnected ? 
+                (isAgentSpeaking && typewriterText ? 
+                  typewriterText : 
+                  subtitles || "Preparando..."
+                ) : 
+                "Clique em 'Começar' para iniciar a conversa"
+              }
+              {isAgentSpeaking && typewriterText && (
+                <span className="animate-pulse ml-1 text-green-400">|</span>
+              )}
             </p>
           </div>
 

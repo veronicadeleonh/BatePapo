@@ -30,6 +30,30 @@ interface UserProfile {
   lastActive: string
 }
 
+// Detailed conversation logging interfaces
+interface ConversationExchange {
+  id: string
+  timestamp: string
+  userInput: string
+  aiResponse: string
+  detectedTopics: string[]
+  conversationFlow: 'greeting' | 'topic_introduction' | 'question' | 'response' | 'followup' | 'goodbye'
+  responseTime: number
+  mood: 'positive' | 'negative' | 'neutral'
+  userEngagement: 'high' | 'medium' | 'low'
+}
+
+interface ConversationSession {
+  sessionId: string
+  startTime: string
+  endTime?: string
+  exchanges: ConversationExchange[]
+  sessionDuration?: number
+  totalExchanges: number
+  dominantTopics: string[]
+  flowPattern: string[]
+}
+
 interface VoiceContextType {
   isListening: boolean
   isConnected: boolean
@@ -37,6 +61,7 @@ interface VoiceContextType {
   isRecording: boolean
   currentTranscript: string
   subtitles: string
+  typewriterText: string
   startConversation: () => Promise<void>
   stopConversation: () => void
   sendTextMessage: (message: string) => void
@@ -46,6 +71,10 @@ interface VoiceContextType {
   voiceActivity: number
   userProfile: UserProfile
   updateUserProfile: (updates: Partial<UserProfile>) => void
+  currentSession: ConversationSession | null
+  getAllSessions: () => ConversationSession[]
+  exportConversationPatterns: () => string
+  downloadConversationData: () => void
 }
 
 const VoiceContext = createContext<VoiceContextType | null>(null)
@@ -60,6 +89,8 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
   const isAutoListeningRef = useRef(false)
   const [currentTranscript, setCurrentTranscript] = useState("")
   const [subtitles, setSubtitles] = useState("")
+  const [typewriterText, setTypewriterText] = useState("")
+  const typewriterTimerRef = useRef<NodeJS.Timeout | null>(null)
   const [debugInfo, setDebugInfo] = useState<string[]>([])
   const [voiceActivity, setVoiceActivity] = useState(0)
   const [bestVoice, setBestVoice] = useState<SpeechSynthesisVoice | null>(null)
@@ -76,6 +107,11 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
     createdAt: new Date().toISOString(),
     lastActive: new Date().toISOString()
   })
+  
+  // Detailed conversation logging state
+  const [currentSession, setCurrentSession] = useState<ConversationSession | null>(null)
+  const [conversationSessions, setConversationSessions] = useState<ConversationSession[]>([])
+  const sessionIdRef = useRef<string>('')
   
   // Real-time speech recognition refs
   const recognitionRef = useRef<any>(null)
@@ -96,6 +132,41 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
   const addDebugLog = useCallback((message: string) => {
     console.log(`[v0] ${message}`)
     setDebugInfo((prev) => [...prev.slice(-4), `${new Date().toLocaleTimeString()}: ${message}`])
+  }, [])
+
+  // Typewriter effect for subtitles
+  const startTypewriterEffect = useCallback((text: string, speed: number = 50) => {
+    // Clear any existing typewriter timer
+    if (typewriterTimerRef.current) {
+      clearInterval(typewriterTimerRef.current)
+    }
+    
+    // Clean text of SSML pause markers for display
+    const cleanText = text.replace(/<pause:\d+ms>/g, ' ')
+    
+    setTypewriterText('')
+    let currentIndex = 0
+    
+    typewriterTimerRef.current = setInterval(() => {
+      if (currentIndex < cleanText.length) {
+        setTypewriterText(cleanText.slice(0, currentIndex + 1))
+        currentIndex++
+      } else {
+        if (typewriterTimerRef.current) {
+          clearInterval(typewriterTimerRef.current)
+          typewriterTimerRef.current = null
+        }
+      }
+    }, speed)
+  }, [])
+
+  // Stop typewriter effect
+  const stopTypewriterEffect = useCallback(() => {
+    if (typewriterTimerRef.current) {
+      clearInterval(typewriterTimerRef.current)
+      typewriterTimerRef.current = null
+    }
+    setTypewriterText('')
   }, [])
 
   // localStorage functions for user profile memory
@@ -149,6 +220,339 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
     })
   }, [saveUserProfile])
 
+  // Conversation session management
+  const saveConversationSessions = useCallback((sessions: ConversationSession[]) => {
+    try {
+      localStorage.setItem('portuguese-tutor-conversations', JSON.stringify(sessions))
+      addDebugLog(`💾 Conversation sessions saved to localStorage`)
+    } catch (error) {
+      addDebugLog(`❌ Failed to save conversation sessions: ${error}`)
+    }
+  }, [addDebugLog])
+
+  const loadConversationSessions = useCallback((): ConversationSession[] => {
+    try {
+      const saved = localStorage.getItem('portuguese-tutor-conversations')
+      if (saved) {
+        const sessions = JSON.parse(saved) as ConversationSession[]
+        addDebugLog(`📂 Conversation sessions loaded from localStorage (${sessions.length} sessions)`)
+        return sessions
+      }
+    } catch (error) {
+      addDebugLog(`❌ Failed to load conversation sessions: ${error}`)
+    }
+    return []
+  }, [addDebugLog])
+
+  // Analyze conversation flow patterns
+  const analyzeConversationFlow = useCallback((userInput: string, isFirstExchange: boolean = false): 'greeting' | 'topic_introduction' | 'question' | 'response' | 'followup' | 'goodbye' => {
+    const lowerInput = userInput.toLowerCase()
+    
+    // Greeting patterns
+    if (isFirstExchange || lowerInput.match(/(olá|oi|bom dia|boa tarde|boa noite|e aí)/)) {
+      return 'greeting'
+    }
+    
+    // Goodbye patterns
+    if (lowerInput.match(/(tchau|até logo|até mais|obrigad[ao]|valeu|falou)/)) {
+      return 'goodbye'
+    }
+    
+    // Question patterns
+    if (lowerInput.includes('?') || lowerInput.match(/(como|que|qual|onde|quando|por que|o que)/)) {
+      return 'question'
+    }
+    
+    // Response patterns (answering previous question)
+    if (lowerInput.match(/(sim|não|acho|gosto|prefiro|e você)/)) {
+      return 'response'
+    }
+    
+    // Topic introduction
+    if (lowerInput.match(/(música|comida|trabalho|família|viagem|brasil|cultura)/)) {
+      return 'topic_introduction'
+    }
+    
+    return 'followup'
+  }, [])
+
+  // Detect user engagement level
+  const detectEngagement = useCallback((userInput: string, responseTime: number): 'high' | 'medium' | 'low' => {
+    const wordCount = userInput.split(' ').length
+    
+    // High engagement: long responses, questions, enthusiasm
+    if (wordCount > 10 || userInput.includes('?') || userInput.match(/(que legal|nossa|incrível|adoro)/)) {
+      return 'high'
+    }
+    
+    // Low engagement: very short responses, long response time
+    if (wordCount < 3 || responseTime > 10000) {
+      return 'low'
+    }
+    
+    return 'medium'
+  }, [])
+
+  // Create new conversation session
+  const startNewSession = useCallback(() => {
+    const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+    sessionIdRef.current = sessionId
+    
+    const newSession: ConversationSession = {
+      sessionId,
+      startTime: new Date().toISOString(),
+      exchanges: [],
+      totalExchanges: 0,
+      dominantTopics: [],
+      flowPattern: []
+    }
+    
+    setCurrentSession(newSession)
+    addDebugLog(`🎆 New conversation session started: ${sessionId}`)
+    
+    return newSession
+  }, [addDebugLog])
+
+  // Log conversation exchange
+  const logConversationExchange = useCallback((userInput: string, aiResponse: string, responseTime: number) => {
+    if (!currentSession) return
+    
+    const timestamp = new Date().toISOString()
+    const exchangeId = `exchange_${currentSession.exchanges.length + 1}_${Date.now()}`
+    
+    // Extract topics from both user input and AI response
+    const extractTopics = (text: string): string[] => {
+      const topicKeywords = ['música', 'comida', 'trabalho', 'família', 'viagem', 'estudo', 'português', 'brasil', 'cultura', 'hobby', 'esporte', 'filme', 'livro', 'amor', 'amigos', 'casa', 'cidade']
+      return topicKeywords.filter(topic => text.toLowerCase().includes(topic))
+    }
+    
+    const extractMood = (text: string): 'positive' | 'negative' | 'neutral' => {
+      const positiveWords = ['feliz', 'bem', 'ótimo', 'bom', 'legal', 'incrível', 'adoro', 'amo', 'gosto']
+      const negativeWords = ['triste', 'mal', 'difícil', 'ruim', 'chato', 'odeio', 'não gosto']
+      
+      const lowerText = text.toLowerCase()
+      const hasPositive = positiveWords.some(word => lowerText.includes(word))
+      const hasNegative = negativeWords.some(word => lowerText.includes(word))
+      
+      if (hasPositive && !hasNegative) return 'positive'
+      if (hasNegative && !hasPositive) return 'negative'
+      return 'neutral'
+    }
+    
+    const detectedTopics = [...new Set([...extractTopics(userInput), ...extractTopics(aiResponse)])]
+    const conversationFlow = analyzeConversationFlow(userInput, currentSession.exchanges.length === 0)
+    const mood = extractMood(userInput)
+    const userEngagement = detectEngagement(userInput, responseTime)
+    
+    const exchange: ConversationExchange = {
+      id: exchangeId,
+      timestamp,
+      userInput,
+      aiResponse,
+      detectedTopics,
+      conversationFlow,
+      responseTime,
+      mood,
+      userEngagement
+    }
+    
+    setCurrentSession(prev => {
+      if (!prev) return null
+      
+      const updatedExchanges = [...prev.exchanges, exchange]
+      const allTopics = updatedExchanges.flatMap(ex => ex.detectedTopics)
+      const topicCounts = allTopics.reduce((acc, topic) => {
+        acc[topic] = (acc[topic] || 0) + 1
+        return acc
+      }, {} as Record<string, number>)
+      
+      const dominantTopics = Object.entries(topicCounts)
+        .sort(([,a], [,b]) => b - a)
+        .slice(0, 5)
+        .map(([topic]) => topic)
+      
+      const flowPattern = [...prev.flowPattern, conversationFlow]
+      
+      const updatedSession = {
+        ...prev,
+        exchanges: updatedExchanges,
+        totalExchanges: updatedExchanges.length,
+        dominantTopics,
+        flowPattern
+      }
+      
+      // Update sessions array and save to localStorage
+      setConversationSessions(prevSessions => {
+        const otherSessions = prevSessions.filter(s => s.sessionId !== prev.sessionId)
+        const newSessions = [...otherSessions, updatedSession]
+        saveConversationSessions(newSessions)
+        return newSessions
+      })
+      
+      return updatedSession
+    })
+    
+    addDebugLog(`📝 Exchange logged: ${conversationFlow} | Topics: [${detectedTopics.join(', ')}] | Mood: ${mood} | Engagement: ${userEngagement}`)
+  }, [currentSession, analyzeConversationFlow, detectEngagement, saveConversationSessions, addDebugLog])
+
+  // End conversation session
+  const endCurrentSession = useCallback(() => {
+    if (!currentSession) return
+    
+    const endTime = new Date().toISOString()
+    const sessionDuration = new Date(endTime).getTime() - new Date(currentSession.startTime).getTime()
+    
+    setCurrentSession(prev => {
+      if (!prev) return null
+      
+      const finalSession = {
+        ...prev,
+        endTime,
+        sessionDuration
+      }
+      
+      setConversationSessions(prevSessions => {
+        const otherSessions = prevSessions.filter(s => s.sessionId !== prev.sessionId)
+        const newSessions = [...otherSessions, finalSession]
+        saveConversationSessions(newSessions)
+        return newSessions
+      })
+      
+      addDebugLog(`🏁 Session ended: ${prev.sessionId} | Duration: ${Math.round(sessionDuration / 1000)}s | Exchanges: ${prev.totalExchanges}`)
+      
+      return null
+    })
+    
+    sessionIdRef.current = ''
+  }, [currentSession, saveConversationSessions, addDebugLog])
+
+  // Get all conversation sessions
+  const getAllSessions = useCallback(() => {
+    return conversationSessions
+  }, [conversationSessions])
+
+  // Export conversation patterns for analysis
+  const exportConversationPatterns = useCallback(() => {
+    const allSessions = conversationSessions
+    
+    const patterns = {
+      totalSessions: allSessions.length,
+      totalExchanges: allSessions.reduce((sum, session) => sum + session.totalExchanges, 0),
+      averageSessionLength: allSessions.length > 0 ? allSessions.reduce((sum, session) => sum + (session.sessionDuration || 0), 0) / allSessions.length / 1000 : 0,
+      mostCommonTopics: {} as Record<string, number>,
+      flowPatterns: {} as Record<string, number>,
+      engagementLevels: { high: 0, medium: 0, low: 0 },
+      moodDistribution: { positive: 0, negative: 0, neutral: 0 },
+      timeOfDayPatterns: { morning: 0, afternoon: 0, evening: 0 },
+      averageResponseTime: 0
+    }
+    
+    let totalExchanges = 0
+    let totalResponseTime = 0
+    
+    allSessions.forEach(session => {
+      // Topic analysis
+      session.dominantTopics.forEach(topic => {
+        patterns.mostCommonTopics[topic] = (patterns.mostCommonTopics[topic] || 0) + 1
+      })
+      
+      // Flow pattern analysis
+      const flowKey = session.flowPattern.join(' → ')
+      patterns.flowPatterns[flowKey] = (patterns.flowPatterns[flowKey] || 0) + 1
+      
+      // Time of day analysis
+      const hour = new Date(session.startTime).getHours()
+      const timeOfDay = hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening'
+      if (timeOfDay in patterns.timeOfDayPatterns) {
+        patterns.timeOfDayPatterns[timeOfDay] += 1;
+      }
+      
+      session.exchanges.forEach(exchange => {
+        // Engagement analysis
+        patterns.engagementLevels[exchange.userEngagement]++
+        
+        // Mood analysis
+        patterns.moodDistribution[exchange.mood]++
+        
+        // Response time analysis
+        totalResponseTime += exchange.responseTime
+        totalExchanges++
+      })
+    })
+    
+    patterns.averageResponseTime = totalExchanges > 0 ? totalResponseTime / totalExchanges : 0
+    
+    const report = `# Portuguese Tutor Conversation Analysis Report
+
+## Overview
+- Total Sessions: ${patterns.totalSessions}
+- Total Exchanges: ${patterns.totalExchanges}
+- Average Session Duration: ${Math.round(patterns.averageSessionLength)}s
+- Average Response Time: ${Math.round(patterns.averageResponseTime)}ms
+
+## Topic Analysis
+${Object.entries(patterns.mostCommonTopics).sort(([,a], [,b]) => b - a).map(([topic, count]) => `- ${topic}: ${count} times`).join('\n')}
+
+## Flow Patterns
+${Object.entries(patterns.flowPatterns).sort(([,a], [,b]) => b - a).slice(0, 10).map(([pattern, count]) => `- ${pattern}: ${count} times`).join('\n')}
+
+## User Engagement
+- High: ${patterns.engagementLevels.high} (${Math.round(patterns.engagementLevels.high / totalExchanges * 100)}%)
+- Medium: ${patterns.engagementLevels.medium} (${Math.round(patterns.engagementLevels.medium / totalExchanges * 100)}%)
+- Low: ${patterns.engagementLevels.low} (${Math.round(patterns.engagementLevels.low / totalExchanges * 100)}%)
+
+## Mood Distribution
+- Positive: ${patterns.moodDistribution.positive} (${Math.round(patterns.moodDistribution.positive / totalExchanges * 100)}%)
+- Neutral: ${patterns.moodDistribution.neutral} (${Math.round(patterns.moodDistribution.neutral / totalExchanges * 100)}%)
+- Negative: ${patterns.moodDistribution.negative} (${Math.round(patterns.moodDistribution.negative / totalExchanges * 100)}%)
+
+## Time of Day Patterns
+${Object.entries(patterns.timeOfDayPatterns).sort(([,a], [,b]) => b - a).map(([time, count]) => `- ${time}: ${count} sessions`).join('\n')}
+
+Generated: ${new Date().toISOString()}`
+    
+    return report
+  }, [conversationSessions])
+
+  // Download conversation data as JSON file
+  const downloadConversationData = useCallback(() => {
+    try {
+      // Gather all data from localStorage
+      const conversationData = {
+        userProfile,
+        conversationSessions,
+        currentSession,
+        exportTimestamp: new Date().toISOString(),
+        analytics: {
+          totalSessions: conversationSessions.length,
+          totalExchanges: conversationSessions.reduce((sum, session) => sum + session.totalExchanges, 0),
+          oldestSession: conversationSessions.length > 0 ? conversationSessions[0]?.startTime : null,
+          newestSession: conversationSessions.length > 0 ? conversationSessions[conversationSessions.length - 1]?.startTime : null
+        }
+      }
+      
+      // Create blob and download link
+      const jsonData = JSON.stringify(conversationData, null, 2)
+      const blob = new Blob([jsonData], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      
+      // Create temporary download link
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `portuguese-tutor-conversation-data-${new Date().toISOString().split('T')[0]}.json`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      
+      // Clean up
+      URL.revokeObjectURL(url)
+      
+      addDebugLog(`📥 Conversation data downloaded: ${conversationSessions.length} sessions, ${conversationData.analytics.totalExchanges} exchanges`)
+    } catch (error) {
+      addDebugLog(`❌ Failed to download conversation data: ${error}`)
+    }
+  }, [userProfile, conversationSessions, currentSession, addDebugLog])
+
   // Process SSML-style pause markers for natural speech
   const processSpeechWithPauses = useCallback(async (text: string, utteranceConfig: any) => {
     const pauseRegex = /<pause:(\d+)ms>/g
@@ -179,9 +583,9 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
       if (part.trim()) {
         addDebugLog(`🗣️ Speaking part: "${part.trim()}"`)
         
-        // Update subtitles progressively to show current part being spoken
+        // Note: Typewriter effect is handled separately in speakText
+        // Just keep track of subtitle progress for compatibility
         subtitleText += part.trim() + ' '
-        setSubtitles(subtitleText.trim())
         
         const utterance = new SpeechSynthesisUtterance(part.trim())
         
@@ -254,12 +658,17 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
     return null
   }, [])
 
-  // Load user profile from localStorage on mount
+  // Load user profile and conversation sessions from localStorage on mount
   useEffect(() => {
     const profile = loadUserProfile()
     setUserProfile(profile)
+    
+    const sessions = loadConversationSessions()
+    setConversationSessions(sessions)
+    
     addDebugLog(`🧠 Memory system initialized${profile.name ? ` for ${profile.name}` : ''}`)
-  }, [loadUserProfile, addDebugLog])
+    addDebugLog(`📂 Loaded ${sessions.length} conversation sessions`)
+  }, [loadUserProfile, loadConversationSessions, addDebugLog])
 
   // Voice loading useEffect to initialize best voice
   useEffect(() => {
@@ -384,7 +793,7 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
           !userAgent.includes('Brave') &&
           !userAgent.includes('Vivaldi')
         )
-        if (isLikelyArc && window.chrome) {
+        if (isLikelyArc && (window as any).chrome) {
           vendor = 'Arc (detected)'
         }
       }
@@ -632,7 +1041,7 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
       startRealTimeSpeechRecognition()
       addDebugLog("🎤 Real-time recognition enabled")
     }
-  }, [addDebugLog, startRealTimeSpeechRecognition])
+  }, [addDebugLog])
 
   const stopVoiceInput = useCallback(() => {
     // Stop real-time speech recognition
@@ -669,6 +1078,9 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
         setIsAutoListening(false)
         isAutoListeningRef.current = false
         addDebugLog("🗣️ Agent started speaking - speech recognition paused")
+        
+        // Start typewriter effect immediately
+        startTypewriterEffect(text, 50)
 
         // Configure utterance settings
         let voice = bestVoice
@@ -723,6 +1135,9 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
           setIsAgentSpeaking(false)
           addDebugLog("✅ Agent finished speaking")
           
+          // Stop typewriter effect when done speaking
+          stopTypewriterEffect()
+          
           // Resume real-time recognition after agent finishes
           isAutoListeningRef.current = true
           setIsAutoListening(true)
@@ -759,8 +1174,10 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
         } catch (error) {
           addDebugLog(`❌ Error in speech synthesis: ${error}`)
           setIsAgentSpeaking(false)
+          stopTypewriterEffect()
         }
 
+        // Keep subtitles for compatibility, but typewriter text will be used for display
         setSubtitles(text.replace(/<pause:\d+ms>/g, '')) // Clean text for subtitles
       }
     },
@@ -959,7 +1376,10 @@ Amigo(a) disse: "${userMessage}"`
         const aiEndTime = performance.now()
         addDebugLog(`🤖 Claude API response in ${(aiEndTime - aiStartTime).toFixed(1)}ms`)
         
-        return claudeResponse
+        // Remove emojis from response before speech synthesis
+        const cleanResponse = claudeResponse.replace(/[\u{1F600}-\u{1F64F}]|[\u{1F300}-\u{1F5FF}]|[\u{1F680}-\u{1F6FF}]|[\u{1F1E0}-\u{1F1FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '').trim()
+        
+        return cleanResponse
       }
       
       // Fallback to local contextual responses
@@ -969,7 +1389,10 @@ Amigo(a) disse: "${userMessage}"`
       const aiEndTime = performance.now()
       addDebugLog(`⚡ Local response generated in ${(aiEndTime - aiStartTime).toFixed(1)}ms`)
       
-      return randomResponse
+      // Remove emojis from local response before speech synthesis
+      const cleanResponse = randomResponse.replace(/[\u{1F600}-\u{1F64F}]|[\u{1F300}-\u{1F5FF}]|[\u{1F680}-\u{1F6FF}]|[\u{1F1E0}-\u{1F1FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '').trim()
+      
+      return cleanResponse
       
     } catch (error) {
       const errorTime = performance.now()
@@ -979,7 +1402,9 @@ Amigo(a) disse: "${userMessage}"`
       try {
         const responses = getContextualResponse(userMessage.toLowerCase())
         const randomResponse = responses[Math.floor(Math.random() * responses.length)]
-        return randomResponse
+        // Remove emojis from fallback response
+        const cleanResponse = randomResponse.replace(/[\u{1F600}-\u{1F64F}]|[\u{1F300}-\u{1F5FF}]|[\u{1F680}-\u{1F6FF}]|[\u{1F1E0}-\u{1F1FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '').trim()
+        return cleanResponse
       } catch (fallbackError) {
         // Ultimate fallback
         return "Desculpe, pode repetir?"
@@ -1011,6 +1436,9 @@ Amigo(a) disse: "${userMessage}"`
         console.log(`⚡ [${responseTimestamp}] AI RESPONSE READY - "${response}" (${(responseReadyTime - responseStartTime).toFixed(1)}ms)`)
         
         addDebugLog(`⚡ Response ready in ${(responseReadyTime - responseStartTime).toFixed(1)}ms`)
+        
+        // Log detailed conversation exchange
+        logConversationExchange(userMessage, response, responseReadyTime - responseStartTime)
 
         // Update conversation history and extract insights
         const extractTopics = (message: string): string[] => {
@@ -1288,6 +1716,9 @@ Amigo(a) disse: "${userMessage}"`
       addDebugLog("🚀 Starting conversation with real-time recognition")
       setIsConnected(true)
       
+      // Start new conversation session
+      startNewSession()
+      
       // Enable auto-listening for continuous recognition
       setIsAutoListening(true)
       isAutoListeningRef.current = true
@@ -1306,10 +1737,13 @@ Amigo(a) disse: "${userMessage}"`
     } catch (error) {
       addDebugLog(`❌ Failed to start conversation: ${error}`)
     }
-  }, [addDebugLog, speakText])
+  }, [addDebugLog, speakText, startNewSession])
 
   const stopConversation = useCallback(() => {
     addDebugLog("⏹️ Stopping conversation")
+
+    // End current conversation session
+    endCurrentSession()
 
     // Stop speech synthesis
     if (window.speechSynthesis) {
@@ -1329,9 +1763,10 @@ Amigo(a) disse: "${userMessage}"`
     isRecordingRef.current = false
     setCurrentTranscript("")
     setSubtitles("")
+    stopTypewriterEffect()
     
     addDebugLog("✅ Conversation stopped - all recognition disabled")
-  }, [addDebugLog, stopRealTimeSpeechRecognition])
+  }, [addDebugLog, stopRealTimeSpeechRecognition, endCurrentSession])
 
   const value: VoiceContextType = {
     isListening,
@@ -1340,6 +1775,7 @@ Amigo(a) disse: "${userMessage}"`
     isRecording,
     currentTranscript,
     subtitles,
+    typewriterText,
     startConversation,
     stopConversation,
     sendTextMessage,
@@ -1349,6 +1785,10 @@ Amigo(a) disse: "${userMessage}"`
     voiceActivity,
     userProfile,
     updateUserProfile,
+    currentSession,
+    getAllSessions,
+    exportConversationPatterns,
+    downloadConversationData,
   }
 
   return <VoiceContext.Provider value={value}>{children}</VoiceContext.Provider>
