@@ -34,7 +34,8 @@ export default function PortugueseTutor() {
     sendTextMessage,
     debugInfo,
     voiceActivity,
-    downloadConversationData,
+    downloadConversationTranscript,
+    clearUserProfile,
   } = useVoice()
 
   // Track conversation exchanges
@@ -172,12 +173,20 @@ export default function PortugueseTutor() {
             </div>
           </div>
           <div className="mt-3 space-y-1 border-t border-white/20 pt-2">
-            <button
-              onClick={downloadConversationData}
-              className="w-full bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 border border-blue-400/30 px-3 py-2 rounded text-xs transition-all mb-2"
-            >
-              📥 Download Conversation Data
-            </button>
+            <div className="space-y-2 mb-2">
+              <button
+                onClick={downloadConversationTranscript}
+                className="w-full bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 border border-blue-400/30 px-3 py-2 rounded text-xs transition-all"
+              >
+                📄 Download Conversation Transcript
+              </button>
+              <button
+                onClick={clearUserProfile}
+                className="w-full bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-400/30 px-3 py-2 rounded text-xs transition-all"
+              >
+                🧹 Clear Profile (Session 1 Reset)
+              </button>
+            </div>
             <div className="max-h-32 overflow-y-auto">
               {debugInfo.slice(-5).map((log, i) => (
                 <div key={i} className="text-xs opacity-70 text-gray-400">

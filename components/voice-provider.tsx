@@ -2,6 +2,7 @@
 
 import type React from "react"
 import { createContext, useContext, useState, useRef, useCallback, useEffect } from "react"
+import { PORTUGUESE_TUTOR_CONFIG } from "@/lib/tutor-config"
 
 // TypeScript declarations for Web Speech API
 declare global {
@@ -14,6 +15,7 @@ declare global {
 // User profile interface for memory system
 interface UserProfile {
   name?: string
+  gender?: 'masculino' | 'feminino' | 'outro'
   preferences: {
     favoriteTopics: string[]
     learningGoals: string[]
@@ -26,6 +28,16 @@ interface UserProfile {
     keyPoints: string[]
     mood: string
   }[]
+  session1Progress: {
+    currentStep: number // 1-4 for Session 1 steps, 5+ means completed
+    completedSteps: {
+      step1_greeting: boolean // Name collection
+      step2_gender: boolean   // Gender identification
+      step3_topics: boolean   // Topic preferences
+      step4_goals: boolean    // Learning goals
+    }
+    isCompleted: boolean
+  }
   createdAt: string
   lastActive: string
 }
@@ -71,10 +83,11 @@ interface VoiceContextType {
   voiceActivity: number
   userProfile: UserProfile
   updateUserProfile: (updates: Partial<UserProfile>) => void
+  clearUserProfile: () => void
   currentSession: ConversationSession | null
   getAllSessions: () => ConversationSession[]
   exportConversationPatterns: () => string
-  downloadConversationData: () => void
+  downloadConversationTranscript: () => void
 }
 
 const VoiceContext = createContext<VoiceContextType | null>(null)
@@ -104,6 +117,16 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
       preferredPace: 'normal'
     },
     conversationHistory: [],
+    session1Progress: {
+      currentStep: 1,
+      completedSteps: {
+        step1_greeting: false,
+        step2_gender: false,
+        step3_topics: false,
+        step4_goals: false
+      },
+      isCompleted: false
+    },
     createdAt: new Date().toISOString(),
     lastActive: new Date().toISOString()
   })
@@ -185,10 +208,24 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
       if (saved) {
         const profile = JSON.parse(saved) as UserProfile
         addDebugLog(`📂 Profile loaded from localStorage`)
-        return {
+        
+        // Add backward compatibility for profiles without Session 1 structure
+        const updatedProfile = {
           ...profile,
-          lastActive: new Date().toISOString()
+          lastActive: new Date().toISOString(),
+          session1Progress: profile.session1Progress || {
+            currentStep: profile.name ? 5 : 1, // If name exists, assume Session 1 completed
+            completedSteps: {
+              step1_greeting: !!profile.name,
+              step2_gender: !!profile.gender,
+              step3_topics: profile.preferences.favoriteTopics.length > 0,
+              step4_goals: profile.preferences.learningGoals.length > 0
+            },
+            isCompleted: !!profile.name // If name exists, assume completed
+          }
         }
+        
+        return updatedProfile
       }
     } catch (error) {
       addDebugLog(`❌ Failed to load profile: ${error}`)
@@ -203,6 +240,16 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
         preferredPace: 'normal'
       },
       conversationHistory: [],
+      session1Progress: {
+        currentStep: 1,
+        completedSteps: {
+          step1_greeting: false,
+          step2_gender: false,
+          step3_topics: false,
+          step4_goals: false
+        },
+        isCompleted: false
+      },
       createdAt: new Date().toISOString(),
       lastActive: new Date().toISOString()
     }
@@ -514,32 +561,69 @@ Generated: ${new Date().toISOString()}`
     return report
   }, [conversationSessions])
 
-  // Download conversation data as JSON file
-  const downloadConversationData = useCallback(() => {
+  // Download conversation transcript as readable TXT file
+  const downloadConversationTranscript = useCallback(() => {
     try {
-      // Gather all data from localStorage
-      const conversationData = {
-        userProfile,
-        conversationSessions,
-        currentSession,
-        exportTimestamp: new Date().toISOString(),
-        analytics: {
-          totalSessions: conversationSessions.length,
-          totalExchanges: conversationSessions.reduce((sum, session) => sum + session.totalExchanges, 0),
-          oldestSession: conversationSessions.length > 0 ? conversationSessions[0]?.startTime : null,
-          newestSession: conversationSessions.length > 0 ? conversationSessions[conversationSessions.length - 1]?.startTime : null
-        }
+      const allSessions = [...conversationSessions]
+      if (currentSession && currentSession.exchanges.length > 0) {
+        allSessions.push(currentSession)
       }
       
+      if (allSessions.length === 0) {
+        addDebugLog(`⚠️ No conversations to export`)
+        return
+      }
+      
+      let transcript = 'PORTUGUESE CONVERSATION TRANSCRIPT\n'
+      transcript += '=====================================\n\n'
+      
+      if (userProfile.name) {
+        transcript += `Student: ${userProfile.name}\n`
+      }
+      transcript += `Export Date: ${new Date().toLocaleString('pt-BR')}\n`
+      transcript += `Total Sessions: ${allSessions.length}\n`
+      transcript += `Total Exchanges: ${allSessions.reduce((sum, session) => sum + session.totalExchanges, 0)}\n\n`
+      
+      allSessions.forEach((session, sessionIndex) => {
+        const sessionDate = new Date(session.startTime)
+        const sessionDuration = session.sessionDuration ? Math.round(session.sessionDuration / 1000) : 0
+        
+        transcript += `SESSION ${sessionIndex + 1} - ${sessionDate.toLocaleDateString('pt-BR')} ${sessionDate.toLocaleTimeString('pt-BR')}\n`
+        if (sessionDuration > 0) {
+          transcript += `Duration: ${Math.floor(sessionDuration / 60)}:${(sessionDuration % 60).toString().padStart(2, '0')}\n`
+        }
+        if (session.dominantTopics.length > 0) {
+          transcript += `Topics: ${session.dominantTopics.join(', ')}\n`
+        }
+        transcript += '---\n\n'
+        
+        session.exchanges.forEach((exchange) => {
+          const exchangeTime = new Date(exchange.timestamp)
+          const timeStr = exchangeTime.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+          
+          // Clean text for display (remove SSML pause markers)
+          const cleanUserInput = exchange.userInput.replace(/<pause:\d+ms>/g, '')
+          const cleanAiResponse = exchange.aiResponse.replace(/<pause:\d+ms>/g, '')
+          
+          transcript += `[${timeStr}] User: ${cleanUserInput}\n`
+          transcript += `[${timeStr}] Agent: ${cleanAiResponse}\n\n`
+        })
+        
+        transcript += '\n'
+      })
+      
+      transcript += '=====================================\n'
+      transcript += 'Generated by Portuguese Tutor App\n'
+      transcript += `https://claude.ai/code\n`
+      
       // Create blob and download link
-      const jsonData = JSON.stringify(conversationData, null, 2)
-      const blob = new Blob([jsonData], { type: 'application/json' })
+      const blob = new Blob([transcript], { type: 'text/plain; charset=utf-8' })
       const url = URL.createObjectURL(blob)
       
       // Create temporary download link
       const link = document.createElement('a')
       link.href = url
-      link.download = `portuguese-tutor-conversation-data-${new Date().toISOString().split('T')[0]}.json`
+      link.download = `portuguese-conversation-${new Date().toISOString().split('T')[0]}.txt`
       document.body.appendChild(link)
       link.click()
       document.body.removeChild(link)
@@ -547,11 +631,70 @@ Generated: ${new Date().toISOString()}`
       // Clean up
       URL.revokeObjectURL(url)
       
-      addDebugLog(`📥 Conversation data downloaded: ${conversationSessions.length} sessions, ${conversationData.analytics.totalExchanges} exchanges`)
+      const totalExchanges = allSessions.reduce((sum, session) => sum + session.totalExchanges, 0)
+      addDebugLog(`📄 Transcript downloaded: ${allSessions.length} sessions, ${totalExchanges} exchanges`)
     } catch (error) {
-      addDebugLog(`❌ Failed to download conversation data: ${error}`)
+      addDebugLog(`❌ Failed to download transcript: ${error}`)
     }
-  }, [userProfile, conversationSessions, currentSession, addDebugLog])
+  }, [conversationSessions, currentSession, userProfile, addDebugLog])
+
+  // Clear user profile and all conversation data for testing Session 1 flow
+  const clearUserProfile = useCallback(() => {
+    try {
+      // Clear localStorage entries
+      localStorage.removeItem('portuguese-tutor-profile')
+      localStorage.removeItem('portuguese-tutor-conversations')
+      localStorage.removeItem('portuguese-tutor-memory') // Legacy key if it exists
+      
+      // Reset user profile to default
+      const defaultProfile: UserProfile = {
+        preferences: {
+          favoriteTopics: [],
+          learningGoals: [],
+          conversationStyle: 'friendly',
+          preferredPace: 'normal'
+        },
+        conversationHistory: [],
+        session1Progress: {
+          currentStep: 1,
+          completedSteps: {
+            step1_greeting: false,
+            step2_gender: false,
+            step3_topics: false,
+            step4_goals: false
+          },
+          isCompleted: false
+        },
+        createdAt: new Date().toISOString(),
+        lastActive: new Date().toISOString()
+      }
+      
+      setUserProfile(defaultProfile)
+      
+      // Clear conversation sessions
+      setConversationSessions([])
+      
+      // End current session if active
+      if (currentSession) {
+        setCurrentSession(null)
+      }
+      
+      // Clear any ongoing conversations
+      if (isConnected) {
+        stopConversation()
+      }
+      
+      // Clear transcripts and subtitles
+      setCurrentTranscript('')
+      setSubtitles('')
+      stopTypewriterEffect()
+      
+      addDebugLog(`🧹 User profile cleared - ready for Session 1 testing`)
+      console.log('🧹 User profile and conversation data cleared for fresh Session 1 testing')
+    } catch (error) {
+      addDebugLog(`❌ Failed to clear user profile: ${error}`)
+    }
+  }, [currentSession, isConnected, stopTypewriterEffect, addDebugLog])
 
   // Process SSML-style pause markers for natural speech
   const processSpeechWithPauses = useCallback(async (text: string, utteranceConfig: any) => {
@@ -1322,6 +1465,142 @@ Generated: ${new Date().toISOString()}`
     ]
   }
 
+  // Process Session 1 information extraction and profile updates
+  const processSession1Information = useCallback(async (userMessage: string, aiResponse: string) => {
+    const currentStep = userProfile.session1Progress.currentStep
+    const lowerMessage = userMessage.toLowerCase()
+    let profileUpdates: Partial<UserProfile> = {}
+    let stepCompleted = false
+    
+    switch (currentStep) {
+      case 1: // Extract name
+        const namePatterns = [
+          /(?:sou|me chamo|meu nome é|eu sou)\s+([a-záàâãäéêèíîìóôòõöúûùüç]+)/i,
+          /^([a-záàâãäéêèíîìóôòõöúûùüç]{2,20})$/i // Just a name by itself
+        ]
+        
+        for (const pattern of namePatterns) {
+          const nameMatch = userMessage.match(pattern)
+          if (nameMatch && nameMatch[1]) {
+            const extractedName = nameMatch[1].charAt(0).toUpperCase() + nameMatch[1].slice(1).toLowerCase()
+            profileUpdates.name = extractedName
+            stepCompleted = true
+            addDebugLog(`👤 Session 1 - Name extracted: ${extractedName}`)
+            break
+          }
+        }
+        break
+        
+      case 2: // Extract gender
+        const genderPatterns = [
+          { patterns: [/\b(homem|masculino|menino|rapaz|garoto|cara)\b/i], gender: 'masculino' as const },
+          { patterns: [/\b(mulher|feminino|menina|moça|garota|senhora)\b/i], gender: 'feminino' as const },
+          { patterns: [/\b(outro|não binário|fluido)\b/i], gender: 'outro' as const }
+        ]
+        
+        for (const { patterns, gender } of genderPatterns) {
+          if (patterns.some(pattern => pattern.test(lowerMessage))) {
+            profileUpdates.gender = gender
+            stepCompleted = true
+            addDebugLog(`⚧️ Session 1 - Gender extracted: ${gender}`)
+            break
+          }
+        }
+        break
+        
+      case 3: // Extract topics/interests
+        const topicKeywords = {
+          'música': ['música', 'cantar', 'tocar', 'instrumento', 'banda', 'samba', 'rock', 'pop'],
+          'comida': ['comida', 'cozinhar', 'comer', 'receita', 'restaurante', 'prato'],
+          'esporte': ['esporte', 'futebol', 'correr', 'nadar', 'academia', 'exercício'],
+          'filmes': ['filme', 'cinema', 'assistir', 'netflix', 'série'],
+          'leitura': ['ler', 'livro', 'leitura', 'romance', 'história'],
+          'viagem': ['viajar', 'viagem', 'conhecer', 'país', 'cultura', 'turismo'],
+          'trabalho': ['trabalho', 'emprego', 'profissão', 'carreira', 'empresa'],
+          'família': ['família', 'filhos', 'pais', 'irmãos', 'casado']
+        }
+        
+        const detectedTopics: string[] = []
+        Object.entries(topicKeywords).forEach(([topic, keywords]) => {
+          if (keywords.some(keyword => lowerMessage.includes(keyword))) {
+            detectedTopics.push(topic)
+          }
+        })
+        
+        if (detectedTopics.length > 0) {
+          profileUpdates.preferences = {
+            ...userProfile.preferences,
+            favoriteTopics: [...new Set([...userProfile.preferences.favoriteTopics, ...detectedTopics])]
+          }
+          stepCompleted = true
+          addDebugLog(`🎯 Session 1 - Topics extracted: ${detectedTopics.join(', ')}`)
+        }
+        break
+        
+      case 4: // Extract learning goals
+        const goalKeywords = {
+          'trabalho': ['trabalho', 'emprego', 'profissional', 'carreira', 'negócios'],
+          'viagem': ['viajar', 'turismo', 'brasil', 'visitar', 'conhecer'],
+          'família': ['família', 'namorad', 'casad', 'filhos', 'parentes'],
+          'cultura': ['cultura', 'entender', 'aprender', 'curiosidade', 'interesse'],
+          'estudo': ['universidade', 'escola', 'curso', 'estudar', 'educação']
+        }
+        
+        const detectedGoals: string[] = []
+        Object.entries(goalKeywords).forEach(([goal, keywords]) => {
+          if (keywords.some(keyword => lowerMessage.includes(keyword))) {
+            detectedGoals.push(goal)
+          }
+        })
+        
+        if (detectedGoals.length > 0) {
+          profileUpdates.preferences = {
+            ...userProfile.preferences,
+            learningGoals: [...new Set([...userProfile.preferences.learningGoals, ...detectedGoals])]
+          }
+          stepCompleted = true
+          addDebugLog(`🎯 Session 1 - Goals extracted: ${detectedGoals.join(', ')}`)
+        }
+        break
+    }
+    
+    // Update profile if information was extracted
+    if (Object.keys(profileUpdates).length > 0 || stepCompleted) {
+      const updatedProgress = { ...userProfile.session1Progress }
+      
+      if (stepCompleted) {
+        // Mark current step as completed
+        switch (currentStep) {
+          case 1:
+            updatedProgress.completedSteps.step1_greeting = true
+            break
+          case 2:
+            updatedProgress.completedSteps.step2_gender = true
+            break
+          case 3:
+            updatedProgress.completedSteps.step3_topics = true
+            break
+          case 4:
+            updatedProgress.completedSteps.step4_goals = true
+            break
+        }
+        
+        // Move to next step or complete Session 1
+        if (currentStep < 4) {
+          updatedProgress.currentStep = currentStep + 1
+          addDebugLog(`➡️ Session 1 - Moving to step ${currentStep + 1}`)
+        } else {
+          updatedProgress.currentStep = 5
+          updatedProgress.isCompleted = true
+          addDebugLog(`✅ Session 1 - Completed! Moving to normal conversations.`)
+        }
+      }
+      
+      profileUpdates.session1Progress = updatedProgress
+      updateUserProfile(profileUpdates)
+    }
+  }, [userProfile, updateUserProfile, addDebugLog])
+
   const generateAIResponse = async (userMessage: string): Promise<string> => {
     const aiStartTime = performance.now()
     
@@ -1357,11 +1636,10 @@ Generated: ${new Date().toISOString()}`
           }
         }
         
-        const systemPrompt = `Você é uma amiga brasileira muito simpática e carismática que adora conversar. Responda sempre em português brasileiro de forma natural e descontraída, como uma amiga falaria. Use frases curtas e simples (máximo 2 frases). SEMPRE faça 1 pergunta relacionada para manter a conversa fluindo. Use pausas naturais escrevendo <pause:300ms> onde apropriado. Seja calorosa, use expressões brasileiras naturais como "que legal!", "nossa!", "que bom!", e sempre demonstre interesse genuíno no que a pessoa fala.
-
-${memoryContext ? `CONTEXTO DA AMIZADE:\n${memoryContext}` : ''}
-
-Amigo(a) disse: "${userMessage}"`
+        // Use system prompt from config and replace placeholder with actual memory context
+        const systemPrompt = PORTUGUESE_TUTOR_CONFIG.systemPrompt
+          .replace('{MEMORY_CONTEXT}', memoryContext || 'Nenhuma informação anterior disponível.') + 
+          `\n\nAmigo(a) disse: "${userMessage}"`
 
         const response = await anthropic.messages.create({
           model: 'claude-3-5-haiku-20241022',
@@ -1375,6 +1653,11 @@ Amigo(a) disse: "${userMessage}"`
         const claudeResponse = response.content[0]?.type === 'text' ? response.content[0].text : ''
         const aiEndTime = performance.now()
         addDebugLog(`🤖 Claude API response in ${(aiEndTime - aiStartTime).toFixed(1)}ms`)
+        
+        // Process Session 1 information extraction if in Session 1
+        if (!userProfile.session1Progress.isCompleted) {
+          await processSession1Information(userMessage, claudeResponse)
+        }
         
         // Remove emojis from response before speech synthesis
         const cleanResponse = claudeResponse.replace(/[\u{1F600}-\u{1F64F}]|[\u{1F300}-\u{1F5FF}]|[\u{1F680}-\u{1F6FF}]|[\u{1F1E0}-\u{1F1FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '').trim()
@@ -1785,10 +2068,11 @@ Amigo(a) disse: "${userMessage}"`
     voiceActivity,
     userProfile,
     updateUserProfile,
+    clearUserProfile,
     currentSession,
     getAllSessions,
     exportConversationPatterns,
-    downloadConversationData,
+    downloadConversationTranscript,
   }
 
   return <VoiceContext.Provider value={value}>{children}</VoiceContext.Provider>
