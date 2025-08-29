@@ -28,7 +28,6 @@ export default function PortugueseTutor() {
     isRecording,
     currentTranscript,
     subtitles,
-    typewriterText,
     startConversation,
     stopConversation,
     sendTextMessage,
@@ -336,20 +335,14 @@ export default function PortugueseTutor() {
           </div>
 
 
-          {/* Subtitles with Typewriter Effect */}
-          <div className="bg-black/30 backdrop-blur-sm border border-white/20 rounded-2xl p-6 min-h-[120px] flex items-center justify-center">
-            <p className="text-2xl md:text-3xl text-center text-white leading-relaxed font-medium max-w-full">
+          {/* Subtitles */}
+          <div className="bg-black/30 backdrop-blur-sm border border-white/20 rounded-2xl p-6">
+            <div className="text-xl md:text-2xl font-medium text-white text-center leading-relaxed">
               {isConnected ? 
-                (isAgentSpeaking && typewriterText ? 
-                  typewriterText : 
-                  subtitles || "Preparando..."
-                ) : 
+                (subtitles || "Preparando...") : 
                 "Clique em 'Começar' para iniciar a conversa"
               }
-              {isAgentSpeaking && typewriterText && (
-                <span className="animate-pulse ml-1 text-green-400">|</span>
-              )}
-            </p>
+            </div>
           </div>
 
           {/* User Transcript */}

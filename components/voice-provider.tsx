@@ -73,7 +73,6 @@ interface VoiceContextType {
   isRecording: boolean
   currentTranscript: string
   subtitles: string
-  typewriterText: string
   startConversation: () => Promise<void>
   stopConversation: () => void
   sendTextMessage: (message: string) => void
@@ -102,8 +101,6 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
   const isAutoListeningRef = useRef(false)
   const [currentTranscript, setCurrentTranscript] = useState("")
   const [subtitles, setSubtitles] = useState("")
-  const [typewriterText, setTypewriterText] = useState("")
-  const typewriterTimerRef = useRef<NodeJS.Timeout | null>(null)
   const [debugInfo, setDebugInfo] = useState<string[]>([])
   const [voiceActivity, setVoiceActivity] = useState(0)
   const [bestVoice, setBestVoice] = useState<SpeechSynthesisVoice | null>(null)
@@ -157,40 +154,13 @@ export function AppVoiceProvider({ children }: { children: React.ReactNode }) {
     setDebugInfo((prev) => [...prev.slice(-4), `${new Date().toLocaleTimeString()}: ${message}`])
   }, [])
 
-  // Typewriter effect for subtitles
-  const startTypewriterEffect = useCallback((text: string, speed: number = 50) => {
-    // Clear any existing typewriter timer
-    if (typewriterTimerRef.current) {
-      clearInterval(typewriterTimerRef.current)
-    }
-    
-    // Clean text of SSML pause markers for display
-    const cleanText = text.replace(/<pause:\d+ms>/g, ' ')
-    
-    setTypewriterText('')
-    let currentIndex = 0
-    
-    typewriterTimerRef.current = setInterval(() => {
-      if (currentIndex < cleanText.length) {
-        setTypewriterText(cleanText.slice(0, currentIndex + 1))
-        currentIndex++
-      } else {
-        if (typewriterTimerRef.current) {
-          clearInterval(typewriterTimerRef.current)
-          typewriterTimerRef.current = null
-        }
-      }
-    }, speed)
+  // Clean text for subtitle display (remove SSML markers)
+  const cleanTextForSubtitles = useCallback((text: string): string => {
+    // Clean text of SSML pause markers and normalize spaces
+    return text.replace(/<pause:\d+ms>/g, ' ').replace(/\s+/g, ' ').trim()
   }, [])
 
-  // Stop typewriter effect
-  const stopTypewriterEffect = useCallback(() => {
-    if (typewriterTimerRef.current) {
-      clearInterval(typewriterTimerRef.current)
-      typewriterTimerRef.current = null
-    }
-    setTypewriterText('')
-  }, [])
+
 
   // localStorage functions for user profile memory
   const saveUserProfile = useCallback((profile: UserProfile) => {
@@ -687,14 +657,13 @@ Generated: ${new Date().toISOString()}`
       // Clear transcripts and subtitles
       setCurrentTranscript('')
       setSubtitles('')
-      stopTypewriterEffect()
       
       addDebugLog(`🧹 User profile cleared - ready for Session 1 testing`)
       console.log('🧹 User profile and conversation data cleared for fresh Session 1 testing')
     } catch (error) {
       addDebugLog(`❌ Failed to clear user profile: ${error}`)
     }
-  }, [currentSession, isConnected, stopTypewriterEffect, addDebugLog])
+  }, [currentSession, isConnected, addDebugLog])
 
   // Process SSML-style pause markers for natural speech
   const processSpeechWithPauses = useCallback(async (text: string, utteranceConfig: any) => {
@@ -1222,8 +1191,6 @@ Generated: ${new Date().toISOString()}`
         isAutoListeningRef.current = false
         addDebugLog("🗣️ Agent started speaking - speech recognition paused")
         
-        // Start typewriter effect immediately
-        startTypewriterEffect(text, 50)
 
         // Configure utterance settings
         let voice = bestVoice
@@ -1279,8 +1246,7 @@ Generated: ${new Date().toISOString()}`
           addDebugLog("✅ Agent finished speaking")
           
           // Stop typewriter effect when done speaking
-          stopTypewriterEffect()
-          
+              
           // Resume real-time recognition after agent finishes
           isAutoListeningRef.current = true
           setIsAutoListening(true)
@@ -1317,11 +1283,10 @@ Generated: ${new Date().toISOString()}`
         } catch (error) {
           addDebugLog(`❌ Error in speech synthesis: ${error}`)
           setIsAgentSpeaking(false)
-          stopTypewriterEffect()
-        }
+            }
 
         // Keep subtitles for compatibility, but typewriter text will be used for display
-        setSubtitles(text.replace(/<pause:\d+ms>/g, '')) // Clean text for subtitles
+        setSubtitles(cleanTextForSubtitles(text))
       }
     },
     [addDebugLog, bestVoice, getBestPortugueseVoice, stopRealTimeSpeechRecognition, isConnected, processSpeechWithPauses],
@@ -2046,7 +2011,6 @@ Generated: ${new Date().toISOString()}`
     isRecordingRef.current = false
     setCurrentTranscript("")
     setSubtitles("")
-    stopTypewriterEffect()
     
     addDebugLog("✅ Conversation stopped - all recognition disabled")
   }, [addDebugLog, stopRealTimeSpeechRecognition, endCurrentSession])
@@ -2058,7 +2022,6 @@ Generated: ${new Date().toISOString()}`
     isRecording,
     currentTranscript,
     subtitles,
-    typewriterText,
     startConversation,
     stopConversation,
     sendTextMessage,
